@@ -27,7 +27,7 @@ public class TileWhisperOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		if (!plugin.isPttActive())
+		if (!plugin.isTransmitting())
 		{
 			return null;
 		}

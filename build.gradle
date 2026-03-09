@@ -24,7 +24,7 @@ dependencies {
 
 	compileOnly 'com.google.code.gson:gson:2.10.1'
 
-	implementation 'club.minnced:opus-java:1.1.1'
+	implementation 'io.github.jaredmdobson:concentus:1.0.2'
 
 	testImplementation 'junit:junit:4.12'
 	testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion

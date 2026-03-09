@@ -72,6 +72,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private NavigationButton navButton;
 
 	volatile boolean pttActive = false;
+	volatile boolean transmitting = false;
 
 	@Override
 	protected void startUp()
@@ -122,6 +123,9 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 						// In VAD mode, AudioCapture itself decides when to transmit
 						shouldSend = true;
 					}
+
+					// Update transmitting flag for overlay
+					transmitting = shouldSend;
 
 					WorldPoint localPos = client.getLocalPlayer() != null
 						? client.getLocalPlayer().getWorldLocation()
@@ -389,6 +393,11 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	public boolean isPttActive()
 	{
 		return pttActive;
+	}
+
+	public boolean isTransmitting()
+	{
+		return transmitting;
 	}
 
 	// ---- Per-player volume/mute controls (called from TileWhisperPanel) ----

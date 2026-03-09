@@ -1,12 +1,10 @@
 package com.tilewhisper.audio;
 
-import com.sun.jna.ptr.PointerByReference;
 import com.tilewhisper.TileWhisperConfig.VoiceActivationMode;
 import lombok.extern.slf4j.Slf4j;
+import io.github.jaredmdobson.concentus.OpusEncoder;
 
 import javax.sound.sampled.*;
-import java.nio.ByteBuffer;
-import java.nio.ShortBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -30,12 +28,13 @@ public class AudioCapture
 	private volatile boolean pushToTalkActive;
 	private final Consumer<byte[]> onAudioFrame;
 	private final double volumeScale;
-	private PointerByReference opusEncoder = null;
+	private OpusEncoder opusEncoder = null;
 
 	// VAD state
-	private final VoiceActivationMode voiceActivationMode;
-	private final int vadThreshold;
+	private volatile VoiceActivationMode voiceActivationMode;
+	private volatile int vadThreshold;
 	private int vadHoldCounter = 0;
+	private int frameCounter = 0;
 
 	public AudioCapture(Consumer<byte[]> onAudioFrame, int inputVolume,
 						VoiceActivationMode voiceActivationMode, int vadThreshold)
@@ -59,8 +58,15 @@ public class AudioCapture
 			return;
 		}
 
-		opusEncoder = OpusCodec.createEncoder();
-		log.info("Opus encoder created");
+		try
+		{
+			opusEncoder = OpusCodec.createEncoder();
+			log.info("Opus encoder created");
+		}
+		catch (Exception e)
+		{
+			throw new LineUnavailableException("Failed to create Opus encoder: " + e.getMessage());
+		}
 
 		targetDataLine = AudioSystem.getTargetDataLine(PCM_FORMAT);
 		targetDataLine.open(PCM_FORMAT);
@@ -76,6 +82,13 @@ public class AudioCapture
 		this.pushToTalkActive = active;
 	}
 
+	public void setVoiceActivation(VoiceActivationMode mode, int threshold)
+	{
+		this.voiceActivationMode = mode;
+		this.vadThreshold = threshold;
+		log.info("Voice activation: {}, VAD threshold: {} (RMS threshold: {})", mode, threshold, threshold * 327);
+	}
+
 	public void close()
 	{
 		running = false;
@@ -86,22 +99,14 @@ public class AudioCapture
 			targetDataLine.close();
 			targetDataLine = null;
 		}
-		if (opusEncoder != null)
-		{
-			OpusCodec.destroyEncoder(opusEncoder);
-			opusEncoder = null;
-		}
+		opusEncoder = null; // Concentus encoder is GC'd
 		log.info("Audio capture stopped");
 	}
 
 	private void captureLoop()
 	{
 		final byte[] pcmBuf = new byte[FRAME_BYTES_PCM];
-		// Direct buffers for Opus encode (JNA requires direct buffers)
-		final ByteBuffer opusInputBuf = ByteBuffer.allocateDirect(FRAME_BYTES_PCM)
-				.order(java.nio.ByteOrder.LITTLE_ENDIAN);
-		final ByteBuffer opusOutputBuf = ByteBuffer.allocateDirect(OpusCodec.MAX_PACKET_BYTES);
-
+		final byte[] opusOutputBuf = new byte[OpusCodec.MAX_PACKET_BYTES];
 		int audioUnavailableRetryCount = 0;
 
 		while (running)
@@ -118,7 +123,7 @@ public class AudioCapture
 						return;
 					}
 					offset += n;
-					audioUnavailableRetryCount = 0; // Reset retry count on successful read
+					audioUnavailableRetryCount = 0;
 				}
 				catch (Exception e)
 				{
@@ -151,7 +156,7 @@ public class AudioCapture
 				}
 			}
 
-			// Determine if we should transmit based on activation mode
+			// Determine if we should transmit
 			boolean shouldTransmit;
 			if (voiceActivationMode == VoiceActivationMode.PTT)
 			{
@@ -159,10 +164,16 @@ public class AudioCapture
 			}
 			else // VAD mode
 			{
-				// vadThreshold is 0-100; map to 0-32767 RMS range (scale * 327 ~= 0.1% of max)
 				int rmsThreshold = vadThreshold * 327;
 				int audioLevel = calculateRMS(pcmBuf);
 				boolean voiceDetected = audioLevel > rmsThreshold;
+
+				// Debug: log VAD levels occasionally (every 10 frames = 200ms)
+				if (running && ++frameCounter % 10 == 0)
+				{
+					log.debug("VAD: level={}, threshold={}, hold={}, transmitting={}",
+							audioLevel, rmsThreshold, vadHoldCounter, voiceDetected || vadHoldCounter > 0);
+				}
 
 				if (voiceDetected)
 				{
@@ -186,30 +197,26 @@ public class AudioCapture
 			}
 
 			// Apply volume scaling
-			byte[] scaledPcm = applyVolumePcm(pcmBuf, volumeScale);
+			applyVolumePcm(pcmBuf, volumeScale);
 
 			// Encode PCM -> Opus
-			opusInputBuf.clear();
-			opusInputBuf.put(scaledPcm);
-			opusInputBuf.flip();
-
-			opusOutputBuf.clear();
-			int encodedBytes = OpusCodec.encode(opusEncoder, opusInputBuf.asShortBuffer(), opusOutputBuf);
-
-			if (encodedBytes > 0)
+			try
 			{
-				byte[] packet = new byte[encodedBytes];
-				opusOutputBuf.rewind();
-				opusOutputBuf.get(packet);
-				onAudioFrame.accept(packet);
+				int encodedBytes = OpusCodec.encode(opusEncoder, pcmBuf, opusOutputBuf);
+				if (encodedBytes > 0)
+				{
+					byte[] packet = new byte[encodedBytes];
+					System.arraycopy(opusOutputBuf, 0, packet, 0, encodedBytes);
+					onAudioFrame.accept(packet);
+				}
+			}
+			catch (Exception e)
+			{
+				log.warn("Opus encode error: {}", e.getMessage());
 			}
 		}
 	}
 
-	/**
-	 * Calculate the RMS (Root Mean Square) of the PCM data.
-	 * Returns a value from 0-32767 (16-bit signed range).
-	 */
 	private static int calculateRMS(byte[] pcm)
 	{
 		long sum = 0;
@@ -222,22 +229,20 @@ public class AudioCapture
 		return (int) Math.sqrt(mean);
 	}
 
-	private static byte[] applyVolumePcm(byte[] pcm, double scale)
+	private static void applyVolumePcm(byte[] pcm, double scale)
 	{
 		if (scale == 1.0)
 		{
-			return pcm;
+			return;
 		}
-		byte[] out = new byte[pcm.length];
 		for (int i = 0; i + 1 < pcm.length; i += 2)
 		{
 			int sample = (short) ((pcm[i + 1] << 8) | (pcm[i] & 0xFF));
 			sample = (int) (sample * scale);
 			if (sample > 32767) sample = 32767;
 			if (sample < -32768) sample = -32768;
-			out[i] = (byte) (sample & 0xFF);
-			out[i + 1] = (byte) ((sample >> 8) & 0xFF);
+			pcm[i] = (byte) (sample & 0xFF);
+			pcm[i + 1] = (byte) ((sample >> 8) & 0xFF);
 		}
-		return out;
 	}
 }
