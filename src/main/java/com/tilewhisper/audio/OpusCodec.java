@@ -34,12 +34,19 @@ public class OpusCodec
 		try
 		{
 			OpusLibrary.loadFromJar();
+			// Force Opus class initialization now so any failure is caught here,
+			// not later at createEncoder()/createDecoder() time.
+			// On macOS, the tomp2p Opus wrapper uses Native.loadLibrary("") which
+			// fails unless the native lib was already loaded via System.load().
+			Opus.INSTANCE.getClass();
 			libraryLoaded = true;
 			log.info("Opus native library loaded successfully");
 		}
-		catch (IOException | UnsupportedOperationException e)
+		catch (Throwable e)
 		{
-			log.warn("Failed to load Opus native library: {}", e.getMessage());
+			// Catch Throwable to cover Error subclasses like ExceptionInInitializerError
+			// and NoClassDefFoundError that JNA throws on some platforms (e.g. macOS).
+			log.warn("Failed to load Opus native library (audio features disabled): {}", e.getMessage());
 			libraryLoaded = false;
 		}
 		return libraryLoaded;
@@ -54,6 +61,10 @@ public class OpusCodec
 
 	public static PointerByReference createEncoder()
 	{
+		if (!libraryLoaded)
+		{
+			throw new IllegalStateException("Opus library not available");
+		}
 		IntBuffer error = IntBuffer.allocate(1);
 		PointerByReference encoder = Opus.INSTANCE.opus_encoder_create(SAMPLE_RATE, CHANNELS, Opus.OPUS_APPLICATION_VOIP, error);
 		if (error.get(0) != Opus.OPUS_OK)
@@ -86,6 +97,10 @@ public class OpusCodec
 
 	public static PointerByReference createDecoder()
 	{
+		if (!libraryLoaded)
+		{
+			throw new IllegalStateException("Opus library not available");
+		}
 		IntBuffer error = IntBuffer.allocate(1);
 		PointerByReference decoder = Opus.INSTANCE.opus_decoder_create(SAMPLE_RATE, CHANNELS, error);
 		if (error.get(0) != Opus.OPUS_OK)

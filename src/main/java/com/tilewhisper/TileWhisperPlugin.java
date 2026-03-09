@@ -96,12 +96,14 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			}
 
 			// Initialize audio (non-fatal — may fail in headless/dev environments)
+			// Use catch Throwable to cover JNA/native errors like NoClassDefFoundError
+			// that occur on platforms where the Opus native lib isn't available.
 			try
 			{
 				audioPlayback = new AudioPlayback(config.outputVolume());
 				audioPlayback.start();
 			}
-			catch (Exception e)
+			catch (Throwable e)
 			{
 				log.warn("Audio playback unavailable: {}", e.getMessage());
 				audioPlayback = null;
@@ -140,7 +142,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 				audioCapture.start();
 				log.info("Audio capture started successfully");
 			}
-			catch (Exception e)
+			catch (Throwable e)
 			{
 				log.warn("Audio capture unavailable: {}", e.getMessage());
 				audioCapture = null;
