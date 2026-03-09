@@ -7,16 +7,25 @@ import net.runelite.client.ui.PluginPanel;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.ActionEvent;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class TileWhisperPanel extends PluginPanel
 {
 	private static final Color CONNECTED_COLOR = new Color(76, 175, 80);
 	private static final Color DISCONNECTED_COLOR = new Color(244, 67, 54);
 	private static final Color TEXT_COLOR = new Color(255, 255, 255);
+	private static final Color SPEAKING_COLOR = new Color(0, 200, 83);
+	private static final Color PANEL_BG = new Color(60, 60, 60);
+	private static final Color BUTTON_BG = new Color(80, 80, 80);
+	private static final Color BUTTON_HOVER = new Color(100, 100, 100);
 
+	private final TileWhisperPlugin plugin;
 	private final JLabel connectionLabel;
+	private final JLabel errorLabel;
 	private final JLabel headerLabel;
 	private final JPanel playersPanel;
 	private final JScrollPane scrollPane;
@@ -24,9 +33,15 @@ public class TileWhisperPanel extends PluginPanel
 	private List<NearbyPlayer> nearbyPlayers = new ArrayList<>();
 	private WorldPoint localPosition;
 
+	// Track speaking players with timestamps for fade-out
+	private final Map<String, Long> speakingTimestamps = new HashMap<>();
+	private static final long SPEAKING_TIMEOUT_MS = 500; // 500ms fade-out
+	private javax.swing.Timer speakingTimer;
+
 	@Inject
-	public TileWhisperPanel()
+	public TileWhisperPanel(TileWhisperPlugin plugin)
 	{
+		this.plugin = plugin;
 		setLayout(new BorderLayout(0, 5));
 		setBackground(Color.DARK_GRAY);
 
@@ -39,6 +54,12 @@ public class TileWhisperPanel extends PluginPanel
 		connectionLabel.setForeground(DISCONNECTED_COLOR);
 		connectionLabel.setFont(connectionLabel.getFont().deriveFont(Font.BOLD, 12f));
 		headerPanel.add(connectionLabel, BorderLayout.NORTH);
+
+		errorLabel = new JLabel();
+		errorLabel.setForeground(DISCONNECTED_COLOR);
+		errorLabel.setFont(errorLabel.getFont().deriveFont(Font.ITALIC, 10f));
+		errorLabel.setVisible(false);
+		headerPanel.add(errorLabel, BorderLayout.CENTER);
 
 		headerLabel = new JLabel("<html><body style='text-align:center'><b>Nearby Players</b></body></html>");
 		headerLabel.setForeground(TEXT_COLOR);
@@ -61,12 +82,45 @@ public class TileWhisperPanel extends PluginPanel
 		scrollPane.getVerticalScrollBar().setUnitIncrement(16);
 
 		add(scrollPane, BorderLayout.CENTER);
+
+		// Start speaking indicator update timer
+		startSpeakingTimer();
+	}
+
+	private void startSpeakingTimer()
+	{
+		speakingTimer = new javax.swing.Timer(50, e -> updateSpeakingIndicators());
+		speakingTimer.start();
+	}
+
+	private void updateSpeakingIndicators()
+	{
+		long now = System.currentTimeMillis();
+		boolean needUpdate = false;
+
+		// Remove expired speaking timestamps
+		for (Map.Entry<String, Long> entry : speakingTimestamps.entrySet())
+		{
+			if (now - entry.getValue() > SPEAKING_TIMEOUT_MS)
+			{
+				needUpdate = true;
+				break;
+			}
+		}
+
+		if (needUpdate)
+		{
+			// Clean up expired entries
+			speakingTimestamps.entrySet().removeIf(entry ->
+				now - entry.getValue() > SPEAKING_TIMEOUT_MS
+			);
+			updatePlayerList();
+		}
 	}
 
 	public void setConnected(boolean connected)
 	{
-		SwingUtilities.invokeLater(() -> {
-			if (connected)
+		SwingUtilities.invokeLater(() -> {			if (connected)
 			{
 				connectionLabel.setText("Connected");
 				connectionLabel.setForeground(CONNECTED_COLOR);
@@ -75,6 +129,24 @@ public class TileWhisperPanel extends PluginPanel
 			{
 				connectionLabel.setText("Not Connected");
 				connectionLabel.setForeground(DISCONNECTED_COLOR);
+			}
+		});
+	}
+
+	/**
+	 * Show an error message in the panel header (e.g. Opus failed to load).
+	 */
+	public void showError(String message)
+	{
+		SwingUtilities.invokeLater(() -> {
+			if (message != null && !message.isEmpty())
+			{
+				errorLabel.setText("<html><small>" + message + "</small></html>");
+				errorLabel.setVisible(true);
+			}
+			else
+			{
+				errorLabel.setVisible(false);
 			}
 		});
 	}
@@ -89,6 +161,24 @@ public class TileWhisperPanel extends PluginPanel
 	{
 		this.localPosition = localPos;
 		updatePlayerList();
+	}
+
+	/**
+	 * Mark a player as currently speaking (called when audio is received).
+	 */
+	public void markPlayerSpeaking(String username)
+	{
+		speakingTimestamps.put(username, System.currentTimeMillis());
+	}
+
+	/**
+	 * Check if a player is currently speaking.
+	 */
+	private boolean isPlayerSpeaking(String username)
+	{
+		Long timestamp = speakingTimestamps.get(username);
+		return timestamp != null
+			&& (System.currentTimeMillis() - timestamp) < SPEAKING_TIMEOUT_MS;
 	}
 
 	private void updatePlayerList()
@@ -120,22 +210,104 @@ public class TileWhisperPanel extends PluginPanel
 
 	private JPanel createPlayerPanel(NearbyPlayer player)
 	{
-		JPanel panel = new JPanel(new BorderLayout());
-		panel.setBackground(new Color(60, 60, 60));
-		panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-		panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+		String username = player.getUsername();
+		boolean speaking = isPlayerSpeaking(username);
+		boolean muted = plugin.isPlayerMuted(username);
+		float volume = plugin.getPlayerVolume(username);
 
-		JLabel nameLabel = new JLabel(player.getUsername());
-		nameLabel.setForeground(TEXT_COLOR);
-		nameLabel.setFont(nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
-		panel.add(nameLabel, BorderLayout.WEST);
+		JPanel panel = new JPanel(new BorderLayout(5, 0));
+		panel.setBackground(speaking ? PANEL_BG.brighter() : PANEL_BG);
+		panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+		panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 70));
+
+		// Left side: Name and distance
+		JPanel leftPanel = new JPanel(new BorderLayout());
+		leftPanel.setOpaque(false);
+
+		JLabel nameLabel = new JLabel(username);
+		nameLabel.setForeground(speaking ? SPEAKING_COLOR : TEXT_COLOR);
+		nameLabel.setFont(nameLabel.getFont().deriveFont(speaking ? Font.BOLD : Font.PLAIN, 12f));
+		leftPanel.add(nameLabel, BorderLayout.NORTH);
 
 		JLabel distanceLabel = new JLabel(getDistanceText(player));
 		distanceLabel.setForeground(new Color(180, 180, 180));
 		distanceLabel.setFont(distanceLabel.getFont().deriveFont(Font.PLAIN, 11f));
-		panel.add(distanceLabel, BorderLayout.EAST);
+		leftPanel.add(distanceLabel, BorderLayout.SOUTH);
+
+		panel.add(leftPanel, BorderLayout.WEST);
+
+		// Right side: Mute button and volume slider
+		JPanel rightPanel = new JPanel(new BorderLayout(5, 0));
+		rightPanel.setOpaque(false);
+		rightPanel.setPreferredSize(new Dimension(100, 60));
+
+		// Mute button
+		JButton muteButton = createMuteButton(username, muted);
+		rightPanel.add(muteButton, BorderLayout.NORTH);
+
+		// Volume slider
+		JSlider volumeSlider = new JSlider(0, 200, (int)(volume * 100));
+		volumeSlider.setMajorTickSpacing(100);
+		volumeSlider.setMinorTickSpacing(50);
+		volumeSlider.setPaintTicks(true);
+		volumeSlider.setPreferredSize(new Dimension(80, 30));
+		volumeSlider.setToolTipText("Volume: " + (int)(volume * 100) + "%");
+		volumeSlider.addChangeListener(e -> {
+			float newVolume = volumeSlider.getValue() / 100.0f;
+			plugin.setPlayerVolume(username, newVolume);
+			volumeSlider.setToolTipText("Volume: " + volumeSlider.getValue() + "%");
+		});
+
+		JPanel sliderPanel = new JPanel(new BorderLayout());
+		sliderPanel.setOpaque(false);
+		JLabel volumeLabel = new JLabel("Vol");
+		volumeLabel.setForeground(new Color(150, 150, 150));
+		volumeLabel.setFont(volumeLabel.getFont().deriveFont(Font.PLAIN, 9f));
+		sliderPanel.add(volumeLabel, BorderLayout.NORTH);
+		sliderPanel.add(volumeSlider, BorderLayout.CENTER);
+
+		rightPanel.add(sliderPanel, BorderLayout.CENTER);
+
+		panel.add(rightPanel, BorderLayout.EAST);
 
 		return panel;
+	}
+
+	private JButton createMuteButton(String username, boolean muted)
+	{
+		JButton button = new JButton(muted ? "🔇" : "🔊");
+		button.setPreferredSize(new Dimension(50, 24));
+		button.setFocusPainted(false);
+		button.setContentAreaFilled(false);
+		button.setOpaque(true);
+		button.setBackground(BUTTON_BG);
+		button.setForeground(muted ? new Color(244, 67, 54) : TEXT_COLOR);
+		button.setBorder(BorderFactory.createEmptyBorder(2, 5, 2, 5));
+		button.setToolTipText(muted ? "Unmute player" : "Mute player");
+
+		button.addActionListener((ActionEvent e) -> {
+			boolean newMuted = !plugin.isPlayerMuted(username);
+			plugin.setPlayerMuted(username, newMuted);
+			button.setText(newMuted ? "🔇" : "🔊");
+			button.setForeground(newMuted ? new Color(244, 67, 54) : TEXT_COLOR);
+			button.setToolTipText(newMuted ? "Unmute player" : "Mute player");
+		});
+
+		button.addMouseListener(new java.awt.event.MouseAdapter() {
+			@Override
+			public void mouseEntered(java.awt.event.MouseEvent e)
+			{
+				button.setBackground(BUTTON_HOVER);
+			}
+
+			@Override
+			public void mouseExited(java.awt.event.MouseEvent e)
+			{
+				button.setBackground(BUTTON_BG);
+			}
+		});
+
+		return button;
 	}
 
 	private String getDistanceText(NearbyPlayer player)
@@ -150,5 +322,17 @@ public class TileWhisperPanel extends PluginPanel
 		int distance = Math.max(dx, dy);
 
 		return distance + " tile" + (distance == 1 ? "" : "s");
+	}
+
+	/**
+	 * Clean up resources when the plugin shuts down.
+	 */
+	public void shutdown()
+	{
+		if (speakingTimer != null)
+		{
+			speakingTimer.stop();
+			speakingTimer = null;
+		}
 	}
 }

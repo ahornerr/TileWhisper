@@ -32,6 +32,8 @@ public class AudioPlayback
 	private final float outputVolumeScale;
 	private final byte[] pcmBuf = new byte[AudioCapture.FRAME_BYTES_PCM];
 	private final Map<String, PointerByReference> decoders = new ConcurrentHashMap<>();
+	private final Map<String, Float> playerVolumes = new ConcurrentHashMap<>();
+	private final Map<String, Boolean> playerMuted = new ConcurrentHashMap<>();
 
 	// Direct buffer for Opus decode output
 	private final ByteBuffer opusDecodeDirectBuf;
@@ -99,6 +101,12 @@ public class AudioPlayback
 			return;
 		}
 
+		// Check if player is muted
+		if (Boolean.TRUE.equals(playerMuted.get(username)))
+		{
+			return;
+		}
+
 		if (!frameQueue.offer(new AudioFrame(username, audioData, volumeFactor)))
 		{
 			log.warn("Audio queue full, dropping frame from {}", username);
@@ -107,8 +115,11 @@ public class AudioPlayback
 
 	private void writeFrame(AudioFrame frame)
 	{
+		// Get player's custom volume (default 1.0)
+		float playerVolume = playerVolumes.getOrDefault(frame.username, 1.0f);
+
 		// 100% config = 2.0x baseline, 200% = 4.0x
-		float scale = frame.volumeFactor * Math.max(0, outputVolumeScale) * 4.0f;
+		float scale = frame.volumeFactor * playerVolume * Math.max(0, outputVolumeScale) * 4.0f;
 
 		try
 		{
@@ -154,6 +165,53 @@ public class AudioPlayback
 		}
 	}
 
+	/**
+	 * Set volume multiplier for a specific player (0.0 to 2.0).
+	 * 1.0 = normal, 0.0 = muted (use setPlayerMuted instead for explicit mute)
+	 */
+	public void setPlayerVolume(String username, float volumeMultiplier)
+	{
+		playerVolumes.put(username, Math.max(0.0f, Math.min(2.0f, volumeMultiplier)));
+		log.debug("Set volume for {} to {}", username, volumeMultiplier);
+	}
+
+	/**
+	 * Get current volume multiplier for a player.
+	 */
+	public float getPlayerVolume(String username)
+	{
+		return playerVolumes.getOrDefault(username, 1.0f);
+	}
+
+	/**
+	 * Mute or unmute a specific player.
+	 */
+	public void setPlayerMuted(String username, boolean muted)
+	{
+		playerMuted.put(username, muted);
+		log.debug("Player {} muted: {}", username, muted);
+	}
+
+	/**
+	 * Check if a player is muted.
+	 */
+	public boolean isPlayerMuted(String username)
+	{
+		return Boolean.TRUE.equals(playerMuted.get(username));
+	}
+
+	/**
+	 * Clear per-player state when a player leaves proximity.
+	 */
+	public void cleanupPlayer(String username)
+	{
+		PointerByReference decoder = decoders.remove(username);
+		if (decoder != null) OpusCodec.destroyDecoder(decoder);
+		playerVolumes.remove(username);
+		playerMuted.remove(username);
+		log.debug("Cleaned up state for {}", username);
+	}
+
 	public void close()
 	{
 		playbackExecutor.shutdownNow();
@@ -169,9 +227,12 @@ public class AudioPlayback
 			OpusCodec.destroyDecoder(decoder);
 		}
 		decoders.clear();
+		playerVolumes.clear();
+		playerMuted.clear();
 	}
 
-	public void cleanupPlayer(String username)
+	// Cleanup decoder only (for when player leaves range but may return)
+	public void cleanupPlayerDecoder(String username)
 	{
 		PointerByReference decoder = decoders.remove(username);
 		if (decoder != null) OpusCodec.destroyDecoder(decoder);
