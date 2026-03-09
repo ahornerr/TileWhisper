@@ -72,7 +72,8 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private NavigationButton navButton;
 
 	volatile boolean pttActive = false;
-	volatile boolean transmitting = false;
+	private volatile long lastTransmitTime = 0;
+	private static final long TRANSMIT_INDICATOR_TIMEOUT_MS = 200;
 
 	@Override
 	protected void startUp()
@@ -125,7 +126,11 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 					}
 
 					// Update transmitting flag for overlay
-					transmitting = shouldSend;
+					long now = System.currentTimeMillis();
+					if (shouldSend)
+					{
+						lastTransmitTime = now;
+					}
 
 					WorldPoint localPos = client.getLocalPlayer() != null
 						? client.getLocalPlayer().getWorldLocation()
@@ -397,7 +402,11 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 	public boolean isTransmitting()
 	{
-		return transmitting;
+		if (config.voiceActivation() == TileWhisperConfig.VoiceActivationMode.PTT)
+		{
+			return pttActive;
+		}
+		return (System.currentTimeMillis() - lastTransmitTime) < TRANSMIT_INDICATOR_TIMEOUT_MS;
 	}
 
 	// ---- Per-player volume/mute controls (called from TileWhisperPanel) ----

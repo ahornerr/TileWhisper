@@ -37,7 +37,7 @@ public interface TileWhisperConfig extends Config
 	)
 	default VoiceActivationMode voiceActivation()
 	{
-		return VoiceActivationMode.VAD;
+		return VoiceActivationMode.PTT;
 	}
 
 	@ConfigItem(
