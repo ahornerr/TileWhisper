@@ -38,6 +38,11 @@ public class VoicePacket
 
 	public static VoicePacket fromBytes(byte[] data)
 	{
+		if (data.length < 14)
+		{
+			throw new IllegalArgumentException("Packet too short: " + data.length);
+		}
+
 		ByteBuffer buffer = ByteBuffer.wrap(data);
 		buffer.order(ByteOrder.LITTLE_ENDIAN);
 
@@ -46,6 +51,11 @@ public class VoicePacket
 		int y = buffer.getInt();
 		int plane = buffer.get() & 0xFF;
 		int usernameLen = buffer.get() & 0xFF;
+
+		if (data.length < 14 + usernameLen)
+		{
+			throw new IllegalArgumentException("Packet too short for username: " + data.length);
+		}
 
 		byte[] usernameBytes = new byte[usernameLen];
 		buffer.get(usernameBytes);

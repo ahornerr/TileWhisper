@@ -27,7 +27,8 @@ public class AudioCapture
 	private volatile boolean running;
 	private volatile boolean pushToTalkActive;
 	private final Consumer<byte[]> onAudioFrame;
-	private final double volumeScale;
+	private volatile double volumeScale;
+	private final short[] pcmShorts = new short[FRAME_SAMPLES];
 	private OpusEncoder opusEncoder = null;
 
 	// VAD state
@@ -87,6 +88,12 @@ public class AudioCapture
 		this.voiceActivationMode = mode;
 		this.vadThreshold = threshold;
 		log.info("Voice activation: {}, VAD threshold: {} (RMS threshold: {})", mode, threshold, threshold * 327);
+	}
+
+	public void setInputVolume(int inputVolume)
+	{
+		this.volumeScale = (inputVolume / 100.0) * 4.0;
+		log.debug("Input volume scale updated: {}x", this.volumeScale);
 	}
 
 	public void close()
@@ -196,13 +203,13 @@ public class AudioCapture
 				continue;
 			}
 
-			// Apply volume scaling
-			applyVolumePcm(pcmBuf, volumeScale);
+			// Apply volume scaling, converting to shorts for encoder
+			applyVolumePcmToShorts(pcmBuf, pcmShorts, volumeScale);
 
 			// Encode PCM -> Opus
 			try
 			{
-				int encodedBytes = OpusCodec.encode(opusEncoder, pcmBuf, opusOutputBuf);
+				int encodedBytes = OpusCodec.encode(opusEncoder, pcmShorts, opusOutputBuf);
 				if (encodedBytes > 0)
 				{
 					byte[] packet = new byte[encodedBytes];
@@ -229,20 +236,15 @@ public class AudioCapture
 		return (int) Math.sqrt(mean);
 	}
 
-	private static void applyVolumePcm(byte[] pcm, double scale)
+	private static void applyVolumePcmToShorts(byte[] pcm, short[] out, double scale)
 	{
-		if (scale == 1.0)
+		for (int i = 0; i < out.length; i++)
 		{
-			return;
-		}
-		for (int i = 0; i + 1 < pcm.length; i += 2)
-		{
-			int sample = (short) ((pcm[i + 1] << 8) | (pcm[i] & 0xFF));
+			int sample = (short) ((pcm[i * 2 + 1] << 8) | (pcm[i * 2] & 0xFF));
 			sample = (int) (sample * scale);
 			if (sample > 32767) sample = 32767;
 			if (sample < -32768) sample = -32768;
-			pcm[i] = (byte) (sample & 0xFF);
-			pcm[i + 1] = (byte) ((sample >> 8) & 0xFF);
+			out[i] = (short) sample;
 		}
 	}
 }
