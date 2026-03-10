@@ -33,6 +33,14 @@ public class AudioPlayback
 	private final Map<String, Float> playerVolumes = new ConcurrentHashMap<>();
 	private final Map<String, Boolean> playerMuted = new ConcurrentHashMap<>();
 
+	// Audio limiter to prevent earrape/loud noise abuse
+	// Simple peak follower with adjustable threshold
+	private float limiterEnvelope = 0.0f;
+	private static final float LIMITER_ATTACK = 0.995f;  // Fast attack
+	private static final float LIMITER_RELEASE = 0.005f; // Slow release
+	private static final float LIMITER_THRESHOLD = 24000.0f;  // Threshold (~0.73 of max)
+	private static final float MAX_ABSOLUTE = 32000.0f;  // Hard cap (~0.98 of max)
+
 	// Dedicated playback thread with bounded queue
 	private final BlockingQueue<AudioFrame> frameQueue = new LinkedBlockingQueue<>(50);
 	private final ExecutorService playbackExecutor;
@@ -128,6 +136,7 @@ public class AudioPlayback
 			{
 				int pcmBytes = decodedSamples * 2;
 				applyVolumePcm(pcmBuf, pcmBytes, scale);
+				applyLimiter(pcmBuf, pcmBytes);
 				sourceDataLine.write(pcmBuf, 0, pcmBytes);
 			}
 			else
@@ -152,6 +161,42 @@ public class AudioPlayback
 			if (sample < -32768) sample = -32768;
 			pcm[i] = (byte) (sample & 0xFF);
 			pcm[i + 1] = (byte) ((sample >> 8) & 0xFF);
+		}
+	}
+
+	/**
+	 * Simple audio limiter to prevent earrape / loud noise abuse.
+	 * Peak follower with fast attack and slow release, capped at MAX_ABSOLUTE.
+	 * Applied after volume scaling, so it clamps the final output regardless of
+	 * per-player or global volume settings.
+	 */
+	private void applyLimiter(byte[] pcm, int length)
+	{
+		for (int i = 0; i + 1 < length; i += 2)
+		{
+			int sample = (short) ((pcm[i + 1] << 8) | (pcm[i] & 0xFF));
+			float absSample = Math.abs(sample);
+
+			// Update envelope: fast attack, slow release
+			if (absSample > limiterEnvelope)
+			{
+				limiterEnvelope += (absSample - limiterEnvelope) * LIMITER_ATTACK;
+			}
+			else
+			{
+				limiterEnvelope -= (limiterEnvelope - absSample) * LIMITER_RELEASE;
+			}
+
+			// Hard cap at threshold (absolute max to prevent clipping)
+			float gain = Math.min(1.0f, LIMITER_THRESHOLD / Math.max(limiterEnvelope, LIMITER_THRESHOLD));
+			int clampedSample = (int) (sample * gain);
+
+			// Enforce absolute ceiling
+			if (clampedSample > MAX_ABSOLUTE) clampedSample = (int) MAX_ABSOLUTE;
+			else if (clampedSample < -MAX_ABSOLUTE) clampedSample = -(int) MAX_ABSOLUTE;
+
+			pcm[i] = (byte) (clampedSample & 0xFF);
+			pcm[i + 1] = (byte) ((clampedSample >> 8) & 0xFF);
 		}
 	}
 
