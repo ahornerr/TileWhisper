@@ -9,7 +9,11 @@ import com.tilewhisper.network.NearbyPlayer;
 import com.tilewhisper.network.VoicePacket;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.Friend;
+import net.runelite.api.FriendsChatManager;
+import net.runelite.api.FriendsChatMember;
 import net.runelite.api.GameState;
+import net.runelite.api.NameableContainer;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.input.KeyListener;
 import net.runelite.api.events.GameTick;
@@ -82,6 +86,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private volatile int cachedY;
 	private volatile int cachedPlane;
 	private volatile String cachedUsername;
+	private volatile java.util.Set<String> cachedFriends = java.util.Collections.emptySet();
 
 	@Override
 	protected void startUp()
@@ -304,6 +309,8 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		{
 			panel.updateNearbyPlayers(localPos);
 		}
+
+		getAndNotifyFriends();
 	}
 
 	@Subscribe
@@ -323,6 +330,52 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		{
 			audioPlayback.setOutputVolume(config.outputVolume());
 		}
+
+		getAndNotifyFriends();
+	}
+
+	private void getAndNotifyFriends()
+	{
+		if (panel == null)
+		{
+			return;
+		}
+
+		java.util.Set<String> friendNames = new java.util.HashSet<>();
+
+		// Friends list
+		NameableContainer<Friend> friendsContainer = client.getFriendContainer();
+		if (friendsContainer != null)
+		{
+			for (int i = 0; i < friendsContainer.getCount(); i++)
+			{
+				Friend friend = friendsContainer.getMembers()[i];
+				if (friend != null && friend.getName() != null)
+				{
+					friendNames.add(friend.getName());
+				}
+			}
+		}
+
+		// Friends chat members (if voiceRangeMode includes FC)
+		if (config.voiceRangeMode() == TileWhisperConfig.VoiceRangeMode.FRIENDS_CHAT
+			|| config.voiceRangeMode() == TileWhisperConfig.VoiceRangeMode.BOTH)
+		{
+			FriendsChatManager fcManager = client.getFriendsChatManager();
+			if (fcManager != null)
+			{
+				for (FriendsChatMember member : fcManager.getMembers())
+				{
+					if (member != null && member.getName() != null)
+					{
+						friendNames.add(member.getName());
+					}
+				}
+			}
+		}
+
+		panel.setFriends(friendNames);
+		cachedFriends = friendNames;
 	}
 
 	@Override
@@ -379,29 +432,81 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			return;
 		}
 
-		int dx = Math.abs(packet.getX() - cachedX);
-		int dy = Math.abs(packet.getY() - cachedY);
-		int distance = Math.max(dx, dy);
-		float volumeFactor = Math.max(0f, 1.0f - (float) distance / config.maxRange());
+		String senderName = packet.getUsername();
+		java.util.Set<String> friends = cachedFriends;
+
+		if (!shouldReceiveAudio(senderName, friends, config.friendsOnly(), config.voiceRangeMode()))
+		{
+			return;
+		}
+
+		// FC mode sends at full volume regardless of tile distance
+		boolean isFCOnlyMode = config.voiceRangeMode() == TileWhisperConfig.VoiceRangeMode.FRIENDS_CHAT
+			&& friends != null && friends.contains(senderName);
+
+		float volumeFactor;
+		if (isFCOnlyMode)
+		{
+			volumeFactor = 1.0f;
+		}
+		else
+		{
+			int dx = Math.abs(packet.getX() - cachedX);
+			int dy = Math.abs(packet.getY() - cachedY);
+			int distance = Math.max(dx, dy);
+			volumeFactor = Math.max(0f, 1.0f - (float) distance / config.maxRange());
+		}
 
 		if (volumeFactor > 0 && audioPlayback != null)
 		{
-			audioPlayback.playAudio(packet.getUsername(), audioData, volumeFactor);
+			audioPlayback.playAudio(senderName, audioData, volumeFactor);
 		}
 
-		// UI updates are lightweight — dispatch to client thread
 		if (volumeFactor > 0)
 		{
 			if (playerOverlay != null)
 			{
-				playerOverlay.markPlayerTransmitting(packet.getUsername());
+				playerOverlay.markPlayerTransmitting(senderName);
 			}
 
 			if (panel != null)
 			{
-				panel.markPlayerSpeaking(packet.getUsername());
+				panel.markPlayerSpeaking(senderName);
 			}
 		}
+	}
+
+	/**
+	 * Decides whether audio from {@code senderName} should be played, given
+	 * the current friends set, friends-only mode, and voice range mode.
+	 * Package-private and static so it can be unit-tested without a RuneLite runtime.
+	 */
+	static boolean shouldReceiveAudio(
+		String senderName,
+		java.util.Set<String> friends,
+		boolean friendsOnly,
+		TileWhisperConfig.VoiceRangeMode voiceRangeMode)
+	{
+		if (senderName == null || friends == null)
+		{
+			return false;
+		}
+
+		boolean senderIsFriend = friends.contains(senderName);
+
+		// Friends-only gate: applies regardless of voice range mode
+		if (friendsOnly && !senderIsFriend)
+		{
+			return false;
+		}
+
+		// FRIENDS_CHAT mode: only allow FC members (stored in the friends set)
+		if (voiceRangeMode == TileWhisperConfig.VoiceRangeMode.FRIENDS_CHAT && !senderIsFriend)
+		{
+			return false;
+		}
+
+		return true;
 	}
 
 	private void onNearbyPlayersReceived(List<NearbyPlayer> players)
