@@ -280,21 +280,13 @@ public class TileWhisperPanel extends PluginPanel
 
 		panel.add(leftPanel, BorderLayout.WEST);
 
-		// Right side: Mute button, ignore button, volume slider
+		// Right side: Mute button and volume slider
 		JPanel rightPanel = new JPanel(new BorderLayout(5, 0));
 		rightPanel.setOpaque(false);
-		rightPanel.setPreferredSize(new Dimension(120, 60));
-
-		JPanel buttonsPanel = new JPanel(new BorderLayout(5, 0));
-		buttonsPanel.setOpaque(false);
+		rightPanel.setPreferredSize(new Dimension(100, 60));
 
 		JButton muteButton = createMuteButton(username, muted);
-		buttonsPanel.add(muteButton, BorderLayout.WEST);
-
-		JButton ignoreButton = createIgnoreButton(username, isIgnored);
-		buttonsPanel.add(ignoreButton, BorderLayout.EAST);
-
-		rightPanel.add(buttonsPanel, BorderLayout.NORTH);
+		rightPanel.add(muteButton, BorderLayout.NORTH);
 
 		JSlider volumeSlider = new JSlider(0, 200, (int) (volume * 100));
 		volumeSlider.setMajorTickSpacing(100);
@@ -341,45 +333,6 @@ public class TileWhisperPanel extends PluginPanel
 			button.setText(newMuted ? "\uD83D\uDD07" : "\uD83D\uDD0A");
 			button.setForeground(newMuted ? new Color(244, 67, 54) : TEXT_COLOR);
 			button.setToolTipText(newMuted ? "Unmute player" : "Mute player");
-		});
-
-		button.addMouseListener(new java.awt.event.MouseAdapter()
-		{
-			@Override
-			public void mouseEntered(java.awt.event.MouseEvent e)
-			{
-				button.setBackground(BUTTON_HOVER);
-			}
-
-			@Override
-			public void mouseExited(java.awt.event.MouseEvent e)
-			{
-				button.setBackground(BUTTON_BG);
-			}
-		});
-
-		return button;
-	}
-
-	private JButton createIgnoreButton(String username, boolean ignored)
-	{
-		JButton button = new JButton(ignored ? "\uD83D\uDD13" : "\uD83D\uDED4"); // 🚫 or 🛡️
-		button.setPreferredSize(new Dimension(50, 24));
-		button.setFocusPainted(false);
-		button.setContentAreaFilled(false);
-		button.setOpaque(true);
-		button.setBackground(BUTTON_BG);
-		button.setForeground(ignored ? new Color(244, 67, 54) : TEXT_COLOR);
-		button.setBorder(BorderFactory.createEmptyBorder(2, 5, 2, 5));
-		button.setToolTipText(ignored ? "Unignore player" : "Ignore player (persistent)");
-
-		button.addActionListener((ActionEvent e) -> {
-			boolean newIgnored = !plugin.isPlayerIgnored(username);
-			plugin.setPlayerIgnored(username, newIgnored);
-			button.setText(newIgnored ? "\uD83D\uDD13" : "\uD83D\uDED4");
-			button.setForeground(newIgnored ? new Color(244, 67, 54) : TEXT_COLOR);
-			button.setToolTipText(newIgnored ? "Unignore player" : "Ignore player (persistent)");
-			updatePlayerList(); // Refresh panel to show ignored status
 		});
 
 		button.addMouseListener(new java.awt.event.MouseAdapter()

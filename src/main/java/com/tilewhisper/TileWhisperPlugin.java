@@ -13,6 +13,7 @@ import net.runelite.api.Friend;
 import net.runelite.api.FriendsChatManager;
 import net.runelite.api.FriendsChatMember;
 import net.runelite.api.GameState;
+import net.runelite.api.Ignore;
 import net.runelite.api.NameableContainer;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.input.KeyListener;
@@ -62,9 +63,6 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	@Inject
 	private ClientThread clientThread;
 
-	@Inject
-	private net.runelite.client.config.ConfigManager configManager;
-
 	@Provides
 	TileWhisperConfig provideConfig(ConfigManager configManager)
 	{
@@ -78,7 +76,6 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private TileWhisperPlayerOverlay playerOverlay;
 	private TileWhisperPanel panel;
 	private NavigationButton navButton;
-	private IgnoreListManager ignoreListManager;
 
 	volatile boolean pttActive = false;
 	private volatile long lastTransmitTime = 0;
@@ -91,6 +88,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private volatile int cachedPlane;
 	private volatile String cachedUsername;
 	private volatile java.util.Set<String> cachedFriends = java.util.Collections.emptySet();
+	private volatile java.util.Set<String> cachedIgnored = java.util.Collections.emptySet();
 
 	@Override
 	protected void startUp()
@@ -99,8 +97,6 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 		try
 		{
-			ignoreListManager = new IgnoreListManager(new IgnoreListManager.ConfigManagerAdapter(configManager));
-
 			// Load Opus library and check result
 			boolean opusLoaded = OpusCodec.loadLibrary();
 			if (!opusLoaded)
@@ -110,7 +106,6 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 			// Initialize panel first (so we can show errors)
 			panel = new TileWhisperPanel(this);
-			panel.setIgnored(ignoreListManager.getAll());
 
 			if (!opusLoaded)
 			{
@@ -349,6 +344,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		}
 
 		java.util.Set<String> friendNames = new java.util.HashSet<>();
+		java.util.Set<String> ignoredNames = new java.util.HashSet<>();
 
 		// Friends list
 		NameableContainer<Friend> friendsContainer = client.getFriendContainer();
@@ -381,8 +377,24 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			}
 		}
 
+		// Ignore list (built-in OSRS ignore list)
+		NameableContainer<Ignore> ignoreContainer = client.getIgnoreContainer();
+		if (ignoreContainer != null)
+		{
+			for (int i = 0; i < ignoreContainer.getCount(); i++)
+			{
+				Ignore ignored = ignoreContainer.getMembers()[i];
+				if (ignored != null && ignored.getName() != null)
+				{
+					ignoredNames.add(ignored.getName());
+				}
+			}
+		}
+
 		panel.setFriends(friendNames);
+		panel.setIgnored(ignoredNames);
 		cachedFriends = friendNames;
+		cachedIgnored = ignoredNames;
 	}
 
 	@Override
@@ -441,7 +453,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 		String senderName = packet.getUsername();
 		java.util.Set<String> friends = cachedFriends;
-		java.util.Set<String> ignored = ignoreListManager != null ? ignoreListManager.getAll() : null;
+		java.util.Set<String> ignored = cachedIgnored;
 
 		if (!shouldReceiveAudio(senderName, friends, config.friendsOnly(), config.voiceRangeMode(), ignored))
 		{
@@ -598,30 +610,5 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	public boolean isPlayerMuted(String username)
 	{
 		return audioPlayback != null && audioPlayback.isPlayerMuted(username);
-	}
-
-	public boolean isPlayerIgnored(String username)
-	{
-		return ignoreListManager != null && ignoreListManager.isIgnored(username);
-	}
-
-	public void setPlayerIgnored(String username, boolean ignored)
-	{
-		if (ignoreListManager == null)
-		{
-			return;
-		}
-		if (ignored)
-		{
-			ignoreListManager.ignore(username);
-		}
-		else
-		{
-			ignoreListManager.unignore(username);
-		}
-		if (panel != null)
-		{
-			panel.setIgnored(ignoreListManager.getAll());
-		}
 	}
 }
