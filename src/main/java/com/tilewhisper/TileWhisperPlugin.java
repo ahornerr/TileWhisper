@@ -25,6 +25,7 @@ import net.runelite.client.input.KeyManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.util.ImageUtil;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 
@@ -185,16 +186,8 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			playerOverlay = new TileWhisperPlayerOverlay(this, client, config);
 			overlayManager.add(playerOverlay);
 
-			// Create a simple icon
-			BufferedImage icon = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
-			Graphics2D g2d = icon.createGraphics();
-			g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-			g2d.setColor(new Color(76, 175, 80)); // Green
-			g2d.fillOval(2, 2, 28, 28);
-			g2d.setColor(Color.WHITE);
-			g2d.setStroke(new BasicStroke(2f));
-			g2d.drawOval(2, 2, 28, 28);
-			g2d.dispose();
+			// Load icon from resources
+			final BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
 
 			navButton = NavigationButton.builder()
 				.tooltip("TileWhisper")
