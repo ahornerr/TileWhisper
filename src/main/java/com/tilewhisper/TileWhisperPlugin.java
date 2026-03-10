@@ -441,14 +441,9 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 		String senderName = packet.getUsername();
 		java.util.Set<String> friends = cachedFriends;
+		java.util.Set<String> ignored = ignoreListManager != null ? ignoreListManager.getAll() : null;
 
-		// Ignore list takes priority over everything
-		if (ignoreListManager != null && ignoreListManager.isIgnored(senderName))
-		{
-			return;
-		}
-
-		if (!shouldReceiveAudio(senderName, friends, config.friendsOnly(), config.voiceRangeMode()))
+		if (!shouldReceiveAudio(senderName, friends, config.friendsOnly(), config.voiceRangeMode(), ignored))
 		{
 			return;
 		}
@@ -490,17 +485,23 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	}
 
 	/**
-	 * Decides whether audio from {@code senderName} should be played, given
-	 * the current friends set, friends-only mode, and voice range mode.
+	 * Decides whether audio from {@code senderName} should be played.
 	 * Package-private and static so it can be unit-tested without a RuneLite runtime.
 	 */
 	static boolean shouldReceiveAudio(
 		String senderName,
 		java.util.Set<String> friends,
 		boolean friendsOnly,
-		TileWhisperConfig.VoiceRangeMode voiceRangeMode)
+		TileWhisperConfig.VoiceRangeMode voiceRangeMode,
+		java.util.Set<String> ignored)
 	{
 		if (senderName == null || friends == null)
+		{
+			return false;
+		}
+
+		// Ignore list takes priority over everything
+		if (ignored != null && ignored.contains(senderName))
 		{
 			return false;
 		}
@@ -520,6 +521,16 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		}
 
 		return true;
+	}
+
+	/** Backward-compatible overload (no ignore list parameter) */
+	static boolean shouldReceiveAudio(
+		String senderName,
+		java.util.Set<String> friends,
+		boolean friendsOnly,
+		TileWhisperConfig.VoiceRangeMode voiceRangeMode)
+	{
+		return shouldReceiveAudio(senderName, friends, friendsOnly, voiceRangeMode, null);
 	}
 
 	private void onNearbyPlayersReceived(List<NearbyPlayer> players)
