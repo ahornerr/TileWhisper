@@ -27,7 +27,7 @@ public class AudioPlayback
 	}
 
 	private SourceDataLine sourceDataLine;
-	private final float outputVolumeScale;
+	private volatile float outputVolumeScale;
 	private final byte[] pcmBuf = new byte[AudioCapture.FRAME_BYTES_PCM];
 	private final Map<String, OpusDecoder> decoders = new ConcurrentHashMap<>();
 	private final Map<String, Float> playerVolumes = new ConcurrentHashMap<>();
@@ -155,6 +155,11 @@ public class AudioPlayback
 		}
 	}
 
+	public void setOutputVolume(int outputVolume)
+	{
+		this.outputVolumeScale = outputVolume / 100.0f;
+	}
+
 	public void setPlayerVolume(String username, float volumeMultiplier)
 	{
 		playerVolumes.put(username, Math.max(0.0f, Math.min(2.0f, volumeMultiplier)));
@@ -195,10 +200,5 @@ public class AudioPlayback
 		decoders.clear(); // Concentus decoders are GC'd
 		playerVolumes.clear();
 		playerMuted.clear();
-	}
-
-	public void cleanupPlayerDecoder(String username)
-	{
-		decoders.remove(username);
 	}
 }
