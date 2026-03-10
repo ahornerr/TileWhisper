@@ -13,6 +13,7 @@ import net.runelite.api.Friend;
 import net.runelite.api.FriendsChatManager;
 import net.runelite.api.FriendsChatMember;
 import net.runelite.api.GameState;
+import net.runelite.api.Ignore;
 import net.runelite.api.NameableContainer;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.input.KeyListener;
@@ -87,6 +88,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private volatile int cachedPlane;
 	private volatile String cachedUsername;
 	private volatile java.util.Set<String> cachedFriends = java.util.Collections.emptySet();
+	private volatile java.util.Set<String> cachedIgnored = java.util.Collections.emptySet();
 
 	@Override
 	protected void startUp()
@@ -342,6 +344,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		}
 
 		java.util.Set<String> friendNames = new java.util.HashSet<>();
+		java.util.Set<String> ignoredNames = new java.util.HashSet<>();
 
 		// Friends list
 		NameableContainer<Friend> friendsContainer = client.getFriendContainer();
@@ -374,8 +377,24 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			}
 		}
 
+		// Ignore list (built-in OSRS ignore list)
+		NameableContainer<Ignore> ignoreContainer = client.getIgnoreContainer();
+		if (ignoreContainer != null)
+		{
+			for (int i = 0; i < ignoreContainer.getCount(); i++)
+			{
+				Ignore ignored = ignoreContainer.getMembers()[i];
+				if (ignored != null && ignored.getName() != null)
+				{
+					ignoredNames.add(ignored.getName());
+				}
+			}
+		}
+
 		panel.setFriends(friendNames);
+		panel.setIgnored(ignoredNames);
 		cachedFriends = friendNames;
+		cachedIgnored = ignoredNames;
 	}
 
 	@Override
@@ -434,8 +453,9 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 		String senderName = packet.getUsername();
 		java.util.Set<String> friends = cachedFriends;
+		java.util.Set<String> ignored = cachedIgnored;
 
-		if (!shouldReceiveAudio(senderName, friends, config.friendsOnly(), config.voiceRangeMode()))
+		if (!shouldReceiveAudio(senderName, friends, config.friendsOnly(), config.voiceRangeMode(), ignored))
 		{
 			return;
 		}
@@ -477,17 +497,23 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	}
 
 	/**
-	 * Decides whether audio from {@code senderName} should be played, given
-	 * the current friends set, friends-only mode, and voice range mode.
+	 * Decides whether audio from {@code senderName} should be played.
 	 * Package-private and static so it can be unit-tested without a RuneLite runtime.
 	 */
 	static boolean shouldReceiveAudio(
 		String senderName,
 		java.util.Set<String> friends,
 		boolean friendsOnly,
-		TileWhisperConfig.VoiceRangeMode voiceRangeMode)
+		TileWhisperConfig.VoiceRangeMode voiceRangeMode,
+		java.util.Set<String> ignored)
 	{
 		if (senderName == null || friends == null)
+		{
+			return false;
+		}
+
+		// Ignore list takes priority over everything
+		if (ignored != null && ignored.contains(senderName))
 		{
 			return false;
 		}
@@ -507,6 +533,16 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		}
 
 		return true;
+	}
+
+	/** Backward-compatible overload (no ignore list parameter) */
+	static boolean shouldReceiveAudio(
+		String senderName,
+		java.util.Set<String> friends,
+		boolean friendsOnly,
+		TileWhisperConfig.VoiceRangeMode voiceRangeMode)
+	{
+		return shouldReceiveAudio(senderName, friends, friendsOnly, voiceRangeMode, null);
 	}
 
 	private void onNearbyPlayersReceived(List<NearbyPlayer> players)

@@ -178,6 +178,58 @@ public class FriendsFilteringTest
 	}
 
 	// ========================================================================
+	// Ignore list (takes priority over all other filtering)
+	// ========================================================================
+
+	@Test
+	public void ignoreList_ignoredPlayer_returnsFalse_regardlessOfMode()
+	{
+		Set<String> friends = new HashSet<>(Arrays.asList("Alice"));
+		Set<String> ignored = new HashSet<>(Arrays.asList("Bob"));
+
+		for (TileWhisperConfig.VoiceRangeMode mode : TileWhisperConfig.VoiceRangeMode.values())
+		{
+			for (boolean friendsOnly : new boolean[]{false, true})
+			{
+				assertFalse("Ignored player should never receive audio (mode=" + mode + " friendsOnly=" + friendsOnly + ")",
+					TileWhisperPlugin.shouldReceiveAudio("Bob", friends, friendsOnly, mode, ignored));
+			}
+		}
+	}
+
+	@Test
+	public void ignoreList_ignoredFriend_returnsFalse()
+	{
+		Set<String> friends = new HashSet<>(Arrays.asList("Alice", "Bob"));
+		Set<String> ignored = new HashSet<>(Arrays.asList("Bob"));
+
+		assertFalse("Bob should not receive audio even if friend and ignored",
+				TileWhisperPlugin.shouldReceiveAudio("Bob", friends, false, TileWhisperConfig.VoiceRangeMode.PROXIMITY, ignored));
+		assertTrue("Alice (not ignored) should receive audio",
+				TileWhisperPlugin.shouldReceiveAudio("Alice", friends, false, TileWhisperConfig.VoiceRangeMode.PROXIMITY, ignored));
+	}
+
+	@Test
+	public void ignoreList_emptyIgnoredSet_allowsThrough()
+	{
+		Set<String> friends = new HashSet<>(Arrays.asList("Alice"));
+		Set<String> ignored = Collections.emptySet();
+
+		assertTrue("Non-ignored player should receive audio",
+				TileWhisperPlugin.shouldReceiveAudio("Alice", friends, false, TileWhisperConfig.VoiceRangeMode.PROXIMITY, ignored));
+	}
+
+	@Test
+	public void ignoreList_nullIgnoredSet_doesNotCrash()
+	{
+		Set<String> friends = new HashSet<>(Arrays.asList("Alice"));
+		boolean result = TileWhisperPlugin.shouldReceiveAudio(
+			"Alice", friends, false, TileWhisperConfig.VoiceRangeMode.PROXIMITY, null
+		);
+		assertTrue("Null ignored set should not block anyone", result);
+	}
+
+	// ========================================================================
 	// Edge cases
 	// ========================================================================
 
