@@ -77,3 +77,33 @@ tasks.register('shadowJar', Jar) {
 	archiveClassifier.set('shadow')
 	archiveFileName.set("${rootProject.name}-${project.version}-all.jar")
 }
+
+// Distribution JAR for external plugin loading (Bolt launcher, etc.)
+// Includes Concentus dependency but excludes test/dev code
+tasks.register('distJar', Jar) {
+	manifest {
+		attributes('Multi-Release': true)
+	}
+
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+	from sourceSets.main.output
+	from {
+		configurations.runtimeClasspath.collect { file ->
+			file.isDirectory() ? file : zipTree(file)
+		}
+	}
+
+	exclude 'META-INF/INDEX.LIST'
+	exclude 'META-INF/*.SF'
+	exclude 'META-INF/*.DSA'
+	exclude 'META-INF/*.RSA'
+	exclude '**/module-info.class'
+	exclude '**/TileWhisperPluginTest.class'
+	exclude '**/TileWhisperPluginTest$*.class'
+
+	group = BasePlugin.BUILD_GROUP
+	archiveClassifier.set('dist')
+	archiveFileName.set("${rootProject.name}-${project.version}.jar")
+
+	description = 'Creates a distribution JAR for external plugin loading (includes Concentus, no dev code)'
+}
