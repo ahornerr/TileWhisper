@@ -43,9 +43,10 @@ chmod +x ~/.var/app/com.adamcake.Bolt/data/bolt-launcher/java-wrapper.sh
 
 1. Open Bolt Launcher
 2. Go to RuneLite settings
-3. Set "Use custom RuneLite JAR" to: `/home/andy/projects/TileWhisper/build/libs/TileWhisper-1.0-SNAPSHOT-all.jar`
-4. Set "RuneLite launch command" to: `~/.var/app/com.adamcake.Bolt/data/bolt-launcher/java-wrapper.sh %command%`
-5. Save and restart Bolt
+3. Enable "Use custom RuneLite JAR"
+4. Set "Use custom RuneLite Jar" to: `/home/andy/projects/TileWhisper/build/libs/TileWhisper-1.0-SNAPSHOT-all.jar`
+5. Set "RuneLite launch command" to: `/home/andy/.var/app/com.adamcake.Bolt/data/bolt-launcher/java-wrapper.sh %command%`
+6. Save and restart Bolt
 
 The wrapper script injects the `-ea` flag so RuneLite's plugin system can load the dev launcher.
 
