@@ -1,11 +1,9 @@
 package com.tilewhisper.audio;
 
-import com.sun.jna.ptr.PointerByReference;
 import lombok.extern.slf4j.Slf4j;
+import io.github.jaredmdobson.concentus.OpusDecoder;
 
 import javax.sound.sampled.*;
-import java.nio.ByteBuffer;
-import java.nio.ShortBuffer;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -31,11 +29,9 @@ public class AudioPlayback
 	private SourceDataLine sourceDataLine;
 	private final float outputVolumeScale;
 	private final byte[] pcmBuf = new byte[AudioCapture.FRAME_BYTES_PCM];
-	private final Map<String, PointerByReference> decoders = new ConcurrentHashMap<>();
-
-	// Direct buffer for Opus decode output
-	private final ByteBuffer opusDecodeDirectBuf;
-	private final ShortBuffer opusDecodeShortBuf;
+	private final Map<String, OpusDecoder> decoders = new ConcurrentHashMap<>();
+	private final Map<String, Float> playerVolumes = new ConcurrentHashMap<>();
+	private final Map<String, Boolean> playerMuted = new ConcurrentHashMap<>();
 
 	// Dedicated playback thread with bounded queue
 	private final BlockingQueue<AudioFrame> frameQueue = new LinkedBlockingQueue<>(50);
@@ -44,9 +40,6 @@ public class AudioPlayback
 	public AudioPlayback(int outputVolume)
 	{
 		this.outputVolumeScale = outputVolume / 100.0f;
-		this.opusDecodeDirectBuf = ByteBuffer.allocateDirect(AudioCapture.FRAME_BYTES_PCM)
-				.order(java.nio.ByteOrder.LITTLE_ENDIAN);
-		this.opusDecodeShortBuf = opusDecodeDirectBuf.asShortBuffer();
 		this.playbackExecutor = Executors.newSingleThreadExecutor(r -> {
 			Thread t = new Thread(r, "TileWhisper-AudioPlayback");
 			t.setDaemon(true);
@@ -99,6 +92,11 @@ public class AudioPlayback
 			return;
 		}
 
+		if (Boolean.TRUE.equals(playerMuted.get(username)))
+		{
+			return;
+		}
+
 		if (!frameQueue.offer(new AudioFrame(username, audioData, volumeFactor)))
 		{
 			log.warn("Audio queue full, dropping frame from {}", username);
@@ -107,24 +105,28 @@ public class AudioPlayback
 
 	private void writeFrame(AudioFrame frame)
 	{
+		float playerVolume = playerVolumes.getOrDefault(frame.username, 1.0f);
 		// 100% config = 2.0x baseline, 200% = 4.0x
-		float scale = frame.volumeFactor * Math.max(0, outputVolumeScale) * 4.0f;
+		float scale = frame.volumeFactor * playerVolume * Math.max(0, outputVolumeScale) * 4.0f;
 
 		try
 		{
-			PointerByReference decoder = decoders.computeIfAbsent(frame.username, u -> {
+			OpusDecoder decoder = decoders.computeIfAbsent(frame.username, u -> {
 				log.info("Creating Opus decoder for {}", u);
-				return OpusCodec.createDecoder();
+				try
+				{
+					return OpusCodec.createDecoder();
+				}
+				catch (Exception e)
+				{
+					throw new RuntimeException("Failed to create decoder for " + u, e);
+				}
 			});
 
-			opusDecodeShortBuf.clear();
-			int decodedSamples = OpusCodec.decode(decoder, frame.audioData, opusDecodeShortBuf);
-
+			int decodedSamples = OpusCodec.decode(decoder, frame.audioData, pcmBuf);
 			if (decodedSamples > 0)
 			{
 				int pcmBytes = decodedSamples * 2;
-				opusDecodeDirectBuf.rewind();
-				opusDecodeDirectBuf.get(pcmBuf, 0, pcmBytes);
 				applyVolumePcm(pcmBuf, pcmBytes, scale);
 				sourceDataLine.write(pcmBuf, 0, pcmBytes);
 			}
@@ -136,8 +138,7 @@ public class AudioPlayback
 		catch (Exception e)
 		{
 			log.error("Error writing audio frame from {}", frame.username, e);
-			PointerByReference decoder = decoders.remove(frame.username);
-			if (decoder != null) OpusCodec.destroyDecoder(decoder);
+			decoders.remove(frame.username); // Force decoder recreation next time
 		}
 	}
 
@@ -154,6 +155,33 @@ public class AudioPlayback
 		}
 	}
 
+	public void setPlayerVolume(String username, float volumeMultiplier)
+	{
+		playerVolumes.put(username, Math.max(0.0f, Math.min(2.0f, volumeMultiplier)));
+	}
+
+	public float getPlayerVolume(String username)
+	{
+		return playerVolumes.getOrDefault(username, 1.0f);
+	}
+
+	public void setPlayerMuted(String username, boolean muted)
+	{
+		playerMuted.put(username, muted);
+	}
+
+	public boolean isPlayerMuted(String username)
+	{
+		return Boolean.TRUE.equals(playerMuted.get(username));
+	}
+
+	public void cleanupPlayer(String username)
+	{
+		decoders.remove(username);
+		playerVolumes.remove(username);
+		playerMuted.remove(username);
+	}
+
 	public void close()
 	{
 		playbackExecutor.shutdownNow();
@@ -164,16 +192,13 @@ public class AudioPlayback
 			sourceDataLine = null;
 			log.info("Audio playback stopped");
 		}
-		for (PointerByReference decoder : decoders.values())
-		{
-			OpusCodec.destroyDecoder(decoder);
-		}
-		decoders.clear();
+		decoders.clear(); // Concentus decoders are GC'd
+		playerVolumes.clear();
+		playerMuted.clear();
 	}
 
-	public void cleanupPlayer(String username)
+	public void cleanupPlayerDecoder(String username)
 	{
-		PointerByReference decoder = decoders.remove(username);
-		if (decoder != null) OpusCodec.destroyDecoder(decoder);
+		decoders.remove(username);
 	}
 }

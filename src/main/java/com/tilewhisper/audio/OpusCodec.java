@@ -1,115 +1,84 @@
 package com.tilewhisper.audio;
 
-import club.minnced.opus.util.OpusLibrary;
-import com.sun.jna.ptr.PointerByReference;
 import lombok.extern.slf4j.Slf4j;
-import tomp2p.opuswrapper.Opus;
-
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.IntBuffer;
-import java.nio.ShortBuffer;
+import io.github.jaredmdobson.concentus.*;
 
 @Slf4j
 public class OpusCodec
 {
 	public static final int SAMPLE_RATE = 16000;
 	public static final int CHANNELS = 1;
-	// 20ms frame at 16kHz = 320 samples
-	public static final int FRAME_SAMPLES = 320;
-	public static final int FRAME_BYTES_PCM = FRAME_SAMPLES * 2; // 16-bit = 2 bytes/sample
-	public static final int MAX_PACKET_BYTES = 1276; // Opus spec max for a 20ms frame
-	public static final int BITRATE = 32000; // 32 kbps — good voice quality
+	public static final int FRAME_SAMPLES = 320; // 20ms at 16kHz
+	public static final int FRAME_BYTES_PCM = FRAME_SAMPLES * 2;
+	public static final int MAX_PACKET_BYTES = 1276;
+	public static final int BITRATE = 32000; // 32 kbps
 
-	private static boolean libraryLoaded = false;
-	private static boolean loadAttempted = false;
-
+	// Concentus is pure Java — no native loading needed.
 	public static synchronized boolean loadLibrary()
 	{
-		if (loadAttempted)
-		{
-			return libraryLoaded;
-		}
-		loadAttempted = true;
-		try
-		{
-			OpusLibrary.loadFromJar();
-			libraryLoaded = true;
-			log.info("Opus native library loaded successfully");
-		}
-		catch (IOException | UnsupportedOperationException e)
-		{
-			log.warn("Failed to load Opus native library: {}", e.getMessage());
-			libraryLoaded = false;
-		}
-		return libraryLoaded;
+		return true;
 	}
 
 	public static boolean isAvailable()
 	{
-		return libraryLoaded;
+		return true;
 	}
 
-	// --- Encoder ---
-
-	public static PointerByReference createEncoder()
+	public static OpusEncoder createEncoder() throws OpusException
 	{
-		IntBuffer error = IntBuffer.allocate(1);
-		PointerByReference encoder = Opus.INSTANCE.opus_encoder_create(SAMPLE_RATE, CHANNELS, Opus.OPUS_APPLICATION_VOIP, error);
-		if (error.get(0) != Opus.OPUS_OK)
-		{
-			throw new RuntimeException("Failed to create Opus encoder, error code: " + error.get(0));
-		}
-		Opus.INSTANCE.opus_encoder_ctl(encoder, Opus.OPUS_SET_BITRATE_REQUEST, BITRATE);
+		OpusEncoder encoder = new OpusEncoder(SAMPLE_RATE, CHANNELS, OpusApplication.OPUS_APPLICATION_VOIP);
+		encoder.setBitrate(BITRATE);
 		return encoder;
 	}
 
-	/**
-	 * Encode one frame of PCM to Opus.
-	 *
-	 * @param encoder pointer from createEncoder()
-	 * @param pcm     direct ShortBuffer of FRAME_SAMPLES shorts (LE order)
-	 * @param output  direct output ByteBuffer, capacity >= MAX_PACKET_BYTES
-	 * @return number of encoded bytes, or <0 on error
-	 */
-	public static int encode(PointerByReference encoder, ShortBuffer pcm, ByteBuffer output)
+	public static int encode(OpusEncoder encoder, byte[] pcm, byte[] opusOutput) throws OpusException
 	{
-		return Opus.INSTANCE.opus_encode(encoder, pcm, FRAME_SAMPLES, output, output.capacity());
+		short[] pcmShorts = bytesToShorts(pcm);
+		return encoder.encode(pcmShorts, 0, FRAME_SAMPLES, opusOutput, 0, opusOutput.length);
 	}
 
-	public static void destroyEncoder(PointerByReference encoder)
+	public static void destroyEncoder(OpusEncoder encoder)
 	{
-		Opus.INSTANCE.opus_encoder_destroy(encoder);
+		// Nothing to do — GC handles it
 	}
 
-	// --- Decoder ---
-
-	public static PointerByReference createDecoder()
+	public static OpusDecoder createDecoder() throws OpusException
 	{
-		IntBuffer error = IntBuffer.allocate(1);
-		PointerByReference decoder = Opus.INSTANCE.opus_decoder_create(SAMPLE_RATE, CHANNELS, error);
-		if (error.get(0) != Opus.OPUS_OK)
+		return new OpusDecoder(SAMPLE_RATE, CHANNELS);
+	}
+
+	public static int decode(OpusDecoder decoder, byte[] opusData, byte[] pcmOutput) throws OpusException
+	{
+		short[] pcmShorts = new short[FRAME_SAMPLES];
+		int samples = decoder.decode(opusData, 0, opusData.length, pcmShorts, 0, FRAME_SAMPLES, false);
+		if (samples > 0)
 		{
-			throw new RuntimeException("Failed to create Opus decoder, error code: " + error.get(0));
+			shortsToBytes(pcmShorts, pcmOutput, samples);
 		}
-		return decoder;
+		return samples;
 	}
 
-	/**
-	 * Decode an Opus packet to PCM shorts.
-	 *
-	 * @param decoder  pointer from createDecoder()
-	 * @param opusData encoded bytes
-	 * @param pcmOut   output ShortBuffer (capacity >= FRAME_SAMPLES)
-	 * @return number of decoded samples per channel, or <0 on error
-	 */
-	public static int decode(PointerByReference decoder, byte[] opusData, ShortBuffer pcmOut)
+	public static void destroyDecoder(OpusDecoder decoder)
 	{
-		return Opus.INSTANCE.opus_decode(decoder, opusData, opusData.length, pcmOut, FRAME_SAMPLES, 0);
+		// Nothing to do — GC handles it
 	}
 
-	public static void destroyDecoder(PointerByReference decoder)
+	private static short[] bytesToShorts(byte[] bytes)
 	{
-		Opus.INSTANCE.opus_decoder_destroy(decoder);
+		short[] shorts = new short[bytes.length / 2];
+		for (int i = 0; i < shorts.length; i++)
+		{
+			shorts[i] = (short) ((bytes[i * 2 + 1] << 8) | (bytes[i * 2] & 0xFF));
+		}
+		return shorts;
+	}
+
+	private static void shortsToBytes(short[] shorts, byte[] bytes, int count)
+	{
+		for (int i = 0; i < count; i++)
+		{
+			bytes[i * 2] = (byte) (shorts[i] & 0xFF);
+			bytes[i * 2 + 1] = (byte) ((shorts[i] >> 8) & 0xFF);
+		}
 	}
 }

@@ -11,14 +11,54 @@ import java.awt.event.KeyEvent;
 @ConfigGroup("tilewhisper")
 public interface TileWhisperConfig extends Config
 {
+	enum VoiceActivationMode
+	{
+		PTT("Push-to-Talk (hold key)"),
+		VAD("Voice Activity Detection");
+
+		public final String label;
+
+		VoiceActivationMode(String label)
+		{
+			this.label = label;
+		}
+
+		@Override
+		public String toString()
+		{
+			return label;
+		}
+	}
+
+	@ConfigItem(
+		keyName = "voiceActivation",
+		name = "Voice Activation",
+		description = "Choose how voice is activated"
+	)
+	default VoiceActivationMode voiceActivation()
+	{
+		return VoiceActivationMode.PTT;
+	}
+
 	@ConfigItem(
 		keyName = "pushToTalkKey",
 		name = "Push to Talk",
-		description = "Hold this key to transmit voice"
+		description = "Hold this key to transmit voice (only used in PTT mode)"
 	)
 	default Keybind pushToTalkKey()
 	{
 		return new Keybind(KeyEvent.VK_V, 0);
+	}
+
+	@Range(min = 0, max = 100)
+	@ConfigItem(
+		keyName = "vadThreshold",
+		name = "VAD Threshold",
+		description = "Microphone level (0-100) that triggers auto-transmit in VAD mode. Higher = less sensitive."
+	)
+	default int vadThreshold()
+	{
+		return 5;
 	}
 
 	@Range(min = 1, max = 50)

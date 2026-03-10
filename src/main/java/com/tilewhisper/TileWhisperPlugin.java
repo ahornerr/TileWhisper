@@ -72,6 +72,8 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private NavigationButton navButton;
 
 	volatile boolean pttActive = false;
+	private volatile long lastTransmitTime = 0;
+	private static final long TRANSMIT_INDICATOR_TIMEOUT_MS = 200;
 
 	@Override
 	protected void startUp()
@@ -80,18 +82,30 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 		try
 		{
-			if (!OpusCodec.loadLibrary())
+			// Load Opus library and check result
+			boolean opusLoaded = OpusCodec.loadLibrary();
+			if (!opusLoaded)
 			{
 				log.error("Failed to load Opus native library — audio will not work");
 			}
 
+			// Initialize panel first (so we can show errors)
+			panel = new TileWhisperPanel(this);
+
+			if (!opusLoaded)
+			{
+				panel.showError("Opus codec unavailable — audio features disabled");
+			}
+
 			// Initialize audio (non-fatal — may fail in headless/dev environments)
+			// Use catch Throwable to cover JNA/native errors like NoClassDefFoundError
+			// that occur on platforms where the Opus native lib isn't available.
 			try
 			{
 				audioPlayback = new AudioPlayback(config.outputVolume());
 				audioPlayback.start();
 			}
-			catch (Exception e)
+			catch (Throwable e)
 			{
 				log.warn("Audio playback unavailable: {}", e.getMessage());
 				audioPlayback = null;
@@ -100,11 +114,29 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			try
 			{
 				audioCapture = new AudioCapture((encoded) -> {
+					boolean shouldSend = false;
+					if (config.voiceActivation() == TileWhisperConfig.VoiceActivationMode.PTT)
+					{
+						shouldSend = pttActive;
+					}
+					else
+					{
+						// In VAD mode, AudioCapture itself decides when to transmit
+						shouldSend = true;
+					}
+
+					// Update transmitting flag for overlay
+					long now = System.currentTimeMillis();
+					if (shouldSend)
+					{
+						lastTransmitTime = now;
+					}
+
 					WorldPoint localPos = client.getLocalPlayer() != null
 						? client.getLocalPlayer().getWorldLocation()
 						: null;
 
-					if (localPos != null && pttActive && networkManager != null)
+					if (localPos != null && shouldSend && networkManager != null)
 					{
 						networkManager.sendAudio(
 							client.getWorld(),
@@ -115,11 +147,11 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 							encoded
 						);
 					}
-				}, config.inputVolume());
+				}, config.inputVolume(), config.voiceActivation(), config.vadThreshold());
 				audioCapture.start();
 				log.info("Audio capture started successfully");
 			}
-			catch (Exception e)
+			catch (Throwable e)
 			{
 				log.warn("Audio capture unavailable: {}", e.getMessage());
 				audioCapture = null;
@@ -139,9 +171,6 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 			playerOverlay = new TileWhisperPlayerOverlay(this, client, config);
 			overlayManager.add(playerOverlay);
-
-			// Initialize panel
-			panel = new TileWhisperPanel();
 
 			// Create a simple icon
 			BufferedImage icon = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
@@ -222,6 +251,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 		if (panel != null)
 		{
+			panel.shutdown();
 			panel = null;
 		}
 
@@ -266,7 +296,8 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	@Override
 	public void keyPressed(KeyEvent e)
 	{
-		if (config.pushToTalkKey().matches(e))
+		if (config.voiceActivation() == TileWhisperConfig.VoiceActivationMode.PTT
+			&& config.pushToTalkKey().matches(e))
 		{
 			pttActive = true;
 			if (audioCapture != null)
@@ -279,7 +310,8 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	@Override
 	public void keyReleased(KeyEvent e)
 	{
-		if (config.pushToTalkKey().matches(e))
+		if (config.voiceActivation() == TileWhisperConfig.VoiceActivationMode.PTT
+			&& config.pushToTalkKey().matches(e))
 		{
 			pttActive = false;
 			if (audioCapture != null)
@@ -329,6 +361,12 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			{
 				playerOverlay.markPlayerTransmitting(packet.getUsername());
 			}
+
+			// Update panel speaking indicator
+			if (panel != null && volumeFactor > 0)
+			{
+				panel.markPlayerSpeaking(packet.getUsername());
+			}
 		});
 	}
 
@@ -360,5 +398,42 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	public boolean isPttActive()
 	{
 		return pttActive;
+	}
+
+	public boolean isTransmitting()
+	{
+		if (config.voiceActivation() == TileWhisperConfig.VoiceActivationMode.PTT)
+		{
+			return pttActive;
+		}
+		return (System.currentTimeMillis() - lastTransmitTime) < TRANSMIT_INDICATOR_TIMEOUT_MS;
+	}
+
+	// ---- Per-player volume/mute controls (called from TileWhisperPanel) ----
+
+	public void setPlayerVolume(String username, float volume)
+	{
+		if (audioPlayback != null)
+		{
+			audioPlayback.setPlayerVolume(username, volume);
+		}
+	}
+
+	public float getPlayerVolume(String username)
+	{
+		return audioPlayback != null ? audioPlayback.getPlayerVolume(username) : 1.0f;
+	}
+
+	public void setPlayerMuted(String username, boolean muted)
+	{
+		if (audioPlayback != null)
+		{
+			audioPlayback.setPlayerMuted(username, muted);
+		}
+	}
+
+	public boolean isPlayerMuted(String username)
+	{
+		return audioPlayback != null && audioPlayback.isPlayerMuted(username);
 	}
 }

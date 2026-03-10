@@ -39,6 +39,8 @@ public class NetworkManager
 
 	private String currentUrl;
 	private volatile HttpClient httpClient;
+	// 1 permit = one audio send at a time; released in whenComplete (fires for success AND failure)
+	private final java.util.concurrent.Semaphore audioSendPermit = new java.util.concurrent.Semaphore(1);
 
 	public NetworkManager(
 		Consumer<List<NearbyPlayer>> onNearbyPlayers,
@@ -124,14 +126,35 @@ public class NetworkManager
 			return;
 		}
 
-		VoicePacket packet = new VoicePacket(world, x, y, plane, username, encoded);
-		byte[] bytes = packet.toBytes();
+		// Non-blocking tryAcquire: drop frame if previous send still in flight
+		if (!audioSendPermit.tryAcquire())
+		{
+			log.debug("Dropping audio frame: send pending");
+			return;
+		}
 
-		log.debug("Sending audio: {} bytes from {}", bytes.length, username);
-		webSocket.sendBinary(ByteBuffer.wrap(bytes), true).exceptionally(ex -> {
-			log.error("Failed to send audio", ex);
-			return null;
-		});
+		try
+		{
+			VoicePacket packet = new VoicePacket(world, x, y, plane, username, encoded);
+			byte[] bytes = packet.toBytes();
+
+			log.debug("Sending audio: {} bytes from {}", bytes.length, username);
+			CompletableFuture<WebSocket> sendFuture = webSocket.sendBinary(ByteBuffer.wrap(bytes), true);
+
+			// whenComplete fires for ALL outcomes: success, failure, cancellation
+			sendFuture.whenComplete((result, ex) -> {
+				audioSendPermit.release();
+				if (ex != null)
+				{
+					log.warn("Audio send failed: {}", ex.getMessage());
+				}
+			});
+		}
+		catch (Throwable e)
+		{
+			log.error("Unexpected error during sendAudio", e);
+			audioSendPermit.release(); // Ensure permit is released even on unexpected errors
+		}
 	}
 
 	public boolean isConnected()
