@@ -91,6 +91,9 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private volatile java.util.Set<String> cachedFriends = java.util.Collections.emptySet();
 	private volatile java.util.Set<String> cachedIgnored = java.util.Collections.emptySet();
 
+	// Track nearby players to detect departures for cleanup (WS callback thread only)
+	private final java.util.Set<String> nearbyUsernames = new java.util.HashSet<>();
+
 	@Override
 	protected void startUp()
 	{
@@ -130,28 +133,12 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			try
 			{
 				audioCapture = new AudioCapture((encoded) -> {
-					boolean shouldSend = false;
-					if (config.voiceActivation() == TileWhisperConfig.VoiceActivationMode.PTT)
-					{
-						shouldSend = pttActive;
-					}
-					else
-					{
-						// In VAD mode, AudioCapture itself decides when to transmit
-						shouldSend = true;
-					}
-
-					// Update transmitting flag for overlay
-					if (shouldSend)
+					// AudioCapture already filters by PTT/VAD before invoking this callback.
+					// Just forward to network layer using cached player state.
+					String username = cachedUsername;
+					if (username != null && networkManager != null)
 					{
 						lastTransmitTime = System.currentTimeMillis();
-					}
-
-					// Use cached player state (updated on client thread in onGameTick)
-					// to avoid thread-safety issues with client.getLocalPlayer()
-					String username = cachedUsername;
-					if (username != null && shouldSend && networkManager != null)
-					{
 						networkManager.sendAudio(
 							cachedWorld,
 							cachedX,
@@ -262,6 +249,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		}
 
 		cachedUsername = null;
+		nearbyUsernames.clear();
 
 		log.info("TileWhisper plugin stopped");
 	}
@@ -319,6 +307,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		if (audioCapture != null)
 		{
 			audioCapture.setVoiceActivation(config.voiceActivation(), config.vadThreshold());
+			audioCapture.setInputVolume(config.inputVolume());
 		}
 
 		if (audioPlayback != null)
@@ -540,6 +529,25 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 	private void onNearbyPlayersReceived(List<NearbyPlayer> players)
 	{
+		// Detect departed players and clean up their audio state
+		java.util.Set<String> newUsernames = new java.util.HashSet<>();
+		for (NearbyPlayer p : players)
+		{
+			if (p.getUsername() != null)
+			{
+				newUsernames.add(p.getUsername());
+			}
+		}
+		for (String username : nearbyUsernames)
+		{
+			if (!newUsernames.contains(username) && audioPlayback != null)
+			{
+				audioPlayback.cleanupPlayer(username);
+			}
+		}
+		nearbyUsernames.clear();
+		nearbyUsernames.addAll(newUsernames);
+
 		clientThread.invokeLater(() -> {
 			if (panel != null)
 			{

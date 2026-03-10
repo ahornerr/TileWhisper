@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import io.github.jaredmdobson.concentus.OpusDecoder;
 
 import javax.sound.sampled.*;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -12,15 +13,14 @@ public class AudioPlayback
 {
 	private static final AudioFormat PCM_FORMAT = new AudioFormat(16000, 16, 1, true, false);
 
-	private static final class AudioFrame
+	/** Encoded audio frame with distance-based volume factor. */
+	private static final class PendingFrame
 	{
-		final String username;
 		final byte[] audioData;
 		final float volumeFactor;
 
-		AudioFrame(String username, byte[] audioData, float volumeFactor)
+		PendingFrame(byte[] audioData, float volumeFactor)
 		{
-			this.username = username;
 			this.audioData = audioData;
 			this.volumeFactor = volumeFactor;
 		}
@@ -28,28 +28,35 @@ public class AudioPlayback
 
 	private SourceDataLine sourceDataLine;
 	private volatile float outputVolumeScale;
-	private final byte[] pcmBuf = new byte[AudioCapture.FRAME_BYTES_PCM];
+
+	// Per-player state
 	private final Map<String, OpusDecoder> decoders = new ConcurrentHashMap<>();
 	private final Map<String, Float> playerVolumes = new ConcurrentHashMap<>();
 	private final Map<String, Boolean> playerMuted = new ConcurrentHashMap<>();
+	// Per-player pending frame queues (bounded to prevent memory pressure from bursts)
+	private final Map<String, ConcurrentLinkedQueue<PendingFrame>> pendingFrames = new ConcurrentHashMap<>();
+	private static final int MAX_PENDING_FRAMES_PER_PLAYER = 10; // 200ms of audio
 
-	// Audio limiter to prevent earrape/loud noise abuse
-	// Simple peak follower with adjustable threshold
+	// Mixer buffers — only accessed from the scheduler thread
+	private final short[] decodeBuffer = new short[AudioCapture.FRAME_SAMPLES];
+	private final int[] mixBuffer = new int[AudioCapture.FRAME_SAMPLES];
+	private final byte[] outputBuffer = new byte[AudioCapture.FRAME_BYTES_PCM];
+
+	// Audio limiter applied to the MIXED output (not per-player)
 	private float limiterEnvelope = 0.0f;
 	private static final float LIMITER_ATTACK = 0.995f;  // Fast attack
 	private static final float LIMITER_RELEASE = 0.005f; // Slow release
 	private static final float LIMITER_THRESHOLD = 24000.0f;  // Threshold (~0.73 of max)
 	private static final float MAX_ABSOLUTE = 32000.0f;  // Hard cap (~0.98 of max)
 
-	// Dedicated playback thread with bounded queue
-	private final BlockingQueue<AudioFrame> frameQueue = new LinkedBlockingQueue<>(50);
-	private final ExecutorService playbackExecutor;
+	// Scheduled mixer fires every 20ms, matching the Opus frame period
+	private final ScheduledExecutorService mixerScheduler;
 
 	public AudioPlayback(int outputVolume)
 	{
 		this.outputVolumeScale = outputVolume / 100.0f;
-		this.playbackExecutor = Executors.newSingleThreadExecutor(r -> {
-			Thread t = new Thread(r, "TileWhisper-AudioPlayback");
+		this.mixerScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+			Thread t = new Thread(r, "TileWhisper-AudioMixer");
 			t.setDaemon(true);
 			return t;
 		});
@@ -69,27 +76,10 @@ public class AudioPlayback
 		}
 
 		sourceDataLine.start();
-		log.info("Audio playback started (Opus codec)");
 
-		playbackExecutor.submit(this::playbackLoop);
-	}
-
-	private void playbackLoop()
-	{
-		while (!Thread.currentThread().isInterrupted())
-		{
-			try
-			{
-				AudioFrame frame = frameQueue.poll(100, TimeUnit.MILLISECONDS);
-				if (frame == null) continue;
-				writeFrame(frame);
-			}
-			catch (InterruptedException e)
-			{
-				Thread.currentThread().interrupt();
-				break;
-			}
-		}
+		// Schedule mixer at 20ms fixed rate (one Opus frame period)
+		mixerScheduler.scheduleAtFixedRate(this::mixAndWriteFrame, 0, 20, TimeUnit.MILLISECONDS);
+		log.info("Audio playback started (Opus codec, mixed output)");
 	}
 
 	/** Enqueue audio for playback — returns immediately, does not block. */
@@ -105,79 +95,100 @@ public class AudioPlayback
 			return;
 		}
 
-		if (!frameQueue.offer(new AudioFrame(username, audioData, volumeFactor)))
-		{
-			log.warn("Audio queue full, dropping frame from {}", username);
-		}
-	}
+		ConcurrentLinkedQueue<PendingFrame> queue =
+			pendingFrames.computeIfAbsent(username, u -> new ConcurrentLinkedQueue<>());
 
-	private void writeFrame(AudioFrame frame)
-	{
-		float playerVolume = playerVolumes.getOrDefault(frame.username, 1.0f);
-		// 100% config = 2.0x baseline, 200% = 4.0x
-		float scale = frame.volumeFactor * playerVolume * Math.max(0, outputVolumeScale) * 4.0f;
-
-		try
+		// Drop oldest frame if queue is full (burst protection)
+		if (queue.size() >= MAX_PENDING_FRAMES_PER_PLAYER)
 		{
-			OpusDecoder decoder = decoders.computeIfAbsent(frame.username, u -> {
-				log.info("Creating Opus decoder for {}", u);
-				try
-				{
-					return OpusCodec.createDecoder();
-				}
-				catch (Exception e)
-				{
-					throw new RuntimeException("Failed to create decoder for " + u, e);
-				}
-			});
+			log.warn("Audio queue full for {}, dropping oldest frame", username);
+			queue.poll();
+		}
 
-			int decodedSamples = OpusCodec.decode(decoder, frame.audioData, pcmBuf);
-			if (decodedSamples > 0)
-			{
-				int pcmBytes = decodedSamples * 2;
-				applyVolumePcm(pcmBuf, pcmBytes, scale);
-				applyLimiter(pcmBuf, pcmBytes);
-				sourceDataLine.write(pcmBuf, 0, pcmBytes);
-			}
-			else
-			{
-				log.warn("Opus decode error {} for {}", decodedSamples, frame.username);
-			}
-		}
-		catch (Exception e)
-		{
-			log.error("Error writing audio frame from {}", frame.username, e);
-			decoders.remove(frame.username); // Force decoder recreation next time
-		}
-	}
-
-	private static void applyVolumePcm(byte[] pcm, int length, float scale)
-	{
-		for (int i = 0; i + 1 < length; i += 2)
-		{
-			int sample = (short) ((pcm[i + 1] << 8) | (pcm[i] & 0xFF));
-			sample = (int) (sample * scale);
-			if (sample > 32767) sample = 32767;
-			if (sample < -32768) sample = -32768;
-			pcm[i] = (byte) (sample & 0xFF);
-			pcm[i + 1] = (byte) ((sample >> 8) & 0xFF);
-		}
+		queue.offer(new PendingFrame(audioData, volumeFactor));
 	}
 
 	/**
-	 * Simple audio limiter to prevent earrape / loud noise abuse.
-	 * Peak follower with fast attack and slow release, capped at MAX_ABSOLUTE.
-	 * Applied after volume scaling, so it clamps the final output regardless of
-	 * per-player or global volume settings.
+	 * Mixer: fires every 20ms. Pops one frame per active player, decodes them all,
+	 * sums the PCM samples into a mix buffer, applies the limiter, and writes the
+	 * combined output to the source data line. All speakers are heard simultaneously.
 	 */
-	private void applyLimiter(byte[] pcm, int length)
+	private void mixAndWriteFrame()
 	{
-		for (int i = 0; i + 1 < length; i += 2)
-		{
-			int sample = (short) ((pcm[i + 1] << 8) | (pcm[i] & 0xFF));
-			float absSample = Math.abs(sample);
+		Arrays.fill(mixBuffer, 0);
+		boolean hasAudio = false;
 
-			// Update envelope: fast attack, slow release
+		for (Map.Entry<String, ConcurrentLinkedQueue<PendingFrame>> entry : pendingFrames.entrySet())
+		{
+			String username = entry.getKey();
+
+			if (Boolean.TRUE.equals(playerMuted.get(username)))
+			{
+				entry.getValue().clear(); // Discard queued frames for muted players
+				continue;
+			}
+
+			PendingFrame frame = entry.getValue().poll();
+			if (frame == null)
+			{
+				continue; // No frame from this player this tick
+			}
+
+			try
+			{
+				OpusDecoder decoder = decoders.computeIfAbsent(username, u -> {
+					log.info("Creating Opus decoder for {}", u);
+					try
+					{
+						return OpusCodec.createDecoder();
+					}
+					catch (Exception e)
+					{
+						throw new RuntimeException("Failed to create decoder for " + u, e);
+					}
+				});
+
+				int decodedSamples = OpusCodec.decodeToShorts(decoder, frame.audioData, decodeBuffer);
+				if (decodedSamples > 0)
+				{
+					float playerVolume = playerVolumes.getOrDefault(username, 1.0f);
+					// Per-player scale: distance factor * per-player knob
+					// Global output volume applied later to the full mix
+					float perPlayerScale = frame.volumeFactor * playerVolume;
+					for (int i = 0; i < decodedSamples; i++)
+					{
+						mixBuffer[i] += (int) (decodeBuffer[i] * perPlayerScale);
+					}
+					hasAudio = true;
+				}
+				else
+				{
+					log.warn("Opus decode error {} for {}", decodedSamples, username);
+					decoders.remove(username); // Force decoder recreation next time
+				}
+			}
+			catch (Exception e)
+			{
+				log.error("Error decoding audio frame from {}", username, e);
+				decoders.remove(username); // Force decoder recreation next time
+			}
+		}
+
+		if (!hasAudio || sourceDataLine == null)
+		{
+			return;
+		}
+
+		// Apply global output scale (100% = 2x baseline, 200% = 4x)
+		float globalScale = Math.max(0, outputVolumeScale) * 4.0f;
+
+		// Convert mixed int buffer to bytes, apply global scale, and limit
+		for (int i = 0; i < AudioCapture.FRAME_SAMPLES; i++)
+		{
+			int sample = (int) (mixBuffer[i] * globalScale);
+
+			// Apply limiter
+			float absSample = Math.abs(sample);
 			if (absSample > limiterEnvelope)
 			{
 				limiterEnvelope += (absSample - limiterEnvelope) * LIMITER_ATTACK;
@@ -187,17 +198,17 @@ public class AudioPlayback
 				limiterEnvelope -= (limiterEnvelope - absSample) * LIMITER_RELEASE;
 			}
 
-			// Hard cap at threshold (absolute max to prevent clipping)
 			float gain = Math.min(1.0f, LIMITER_THRESHOLD / Math.max(limiterEnvelope, LIMITER_THRESHOLD));
-			int clampedSample = (int) (sample * gain);
+			sample = (int) (sample * gain);
 
-			// Enforce absolute ceiling
-			if (clampedSample > MAX_ABSOLUTE) clampedSample = (int) MAX_ABSOLUTE;
-			else if (clampedSample < -MAX_ABSOLUTE) clampedSample = -(int) MAX_ABSOLUTE;
+			if (sample > MAX_ABSOLUTE) sample = (int) MAX_ABSOLUTE;
+			else if (sample < -MAX_ABSOLUTE) sample = -(int) MAX_ABSOLUTE;
 
-			pcm[i] = (byte) (clampedSample & 0xFF);
-			pcm[i + 1] = (byte) ((clampedSample >> 8) & 0xFF);
+			outputBuffer[i * 2] = (byte) (sample & 0xFF);
+			outputBuffer[i * 2 + 1] = (byte) ((sample >> 8) & 0xFF);
 		}
+
+		sourceDataLine.write(outputBuffer, 0, outputBuffer.length);
 	}
 
 	public void setOutputVolume(int outputVolume)
@@ -230,20 +241,35 @@ public class AudioPlayback
 		decoders.remove(username);
 		playerVolumes.remove(username);
 		playerMuted.remove(username);
+		pendingFrames.remove(username);
 	}
 
 	public void close()
 	{
-		playbackExecutor.shutdownNow();
+		mixerScheduler.shutdownNow();
+		try
+		{
+			if (!mixerScheduler.awaitTermination(1, TimeUnit.SECONDS))
+			{
+				mixerScheduler.shutdownNow();
+			}
+		}
+		catch (InterruptedException e)
+		{
+			Thread.currentThread().interrupt();
+		}
+
 		if (sourceDataLine != null)
 		{
-			sourceDataLine.drain();
+			sourceDataLine.flush(); // Use flush instead of drain to avoid blocking shutdown
+			sourceDataLine.stop();
 			sourceDataLine.close();
 			sourceDataLine = null;
 			log.info("Audio playback stopped");
 		}
-		decoders.clear(); // Concentus decoders are GC'd
+		decoders.clear();
 		playerVolumes.clear();
 		playerMuted.clear();
+		pendingFrames.clear();
 	}
 }

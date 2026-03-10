@@ -31,15 +31,28 @@ public class OpusCodec
 		return encoder;
 	}
 
-	public static int encode(OpusEncoder encoder, byte[] pcm, byte[] opusOutput) throws OpusException
+	public static int encode(OpusEncoder encoder, short[] pcm, byte[] opusOutput) throws OpusException
 	{
-		short[] pcmShorts = bytesToShorts(pcm);
-		return encoder.encode(pcmShorts, 0, FRAME_SAMPLES, opusOutput, 0, opusOutput.length);
+		return encoder.encode(pcm, 0, FRAME_SAMPLES, opusOutput, 0, opusOutput.length);
+	}
+
+	// Backward-compatible overload for tests
+	public static int encode(OpusEncoder encoder, byte[] pcmBytes, byte[] opusOutput) throws OpusException
+	{
+		short[] pcm = new short[FRAME_SAMPLES];
+		bytesToShorts(pcmBytes, pcm);
+		return encoder.encode(pcm, 0, FRAME_SAMPLES, opusOutput, 0, opusOutput.length);
 	}
 
 	public static void destroyEncoder(OpusEncoder encoder)
 	{
 		// Nothing to do — GC handles it
+	}
+
+	public static int decodeToShorts(OpusDecoder decoder, byte[] opusData, short[] pcmOutput) throws OpusException
+	{
+		int samples = decoder.decode(opusData, 0, opusData.length, pcmOutput, 0, FRAME_SAMPLES, false);
+		return samples;
 	}
 
 	public static OpusDecoder createDecoder() throws OpusException
@@ -63,14 +76,12 @@ public class OpusCodec
 		// Nothing to do — GC handles it
 	}
 
-	private static short[] bytesToShorts(byte[] bytes)
+	private static void bytesToShorts(byte[] bytes, short[] shorts)
 	{
-		short[] shorts = new short[bytes.length / 2];
 		for (int i = 0; i < shorts.length; i++)
 		{
 			shorts[i] = (short) ((bytes[i * 2 + 1] << 8) | (bytes[i * 2] & 0xFF));
 		}
-		return shorts;
 	}
 
 	private static void shortsToBytes(short[] shorts, byte[] bytes, int count)

@@ -34,11 +34,11 @@ public class TileWhisperPanel extends PluginPanel
 	private final JPanel playersPanel;
 	private final JScrollPane scrollPane;
 
-	private List<NearbyPlayer> nearbyPlayers = new ArrayList<>();
+	private volatile List<NearbyPlayer> nearbyPlayers = new ArrayList<>();
 	private WorldPoint localPosition;
 
-	// Track speaking players with timestamps for fade-out
-	private final Map<String, Long> speakingTimestamps = new HashMap<>();
+	// Track speaking players with timestamps for fade-out (ConcurrentHashMap for thread-safety)
+	private final Map<String, Long> speakingTimestamps = new java.util.concurrent.ConcurrentHashMap<>();
 	private static final long SPEAKING_TIMEOUT_MS = 500;
 	private javax.swing.Timer speakingTimer;
 
