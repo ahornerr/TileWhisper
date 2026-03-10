@@ -62,6 +62,9 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	@Inject
 	private ClientThread clientThread;
 
+	@Inject
+	private net.runelite.client.config.ConfigManager configManager;
+
 	@Provides
 	TileWhisperConfig provideConfig(ConfigManager configManager)
 	{
@@ -75,6 +78,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private TileWhisperPlayerOverlay playerOverlay;
 	private TileWhisperPanel panel;
 	private NavigationButton navButton;
+	private IgnoreListManager ignoreListManager;
 
 	volatile boolean pttActive = false;
 	private volatile long lastTransmitTime = 0;
@@ -95,6 +99,8 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 		try
 		{
+			ignoreListManager = new IgnoreListManager(new IgnoreListManager.ConfigManagerAdapter(configManager));
+
 			// Load Opus library and check result
 			boolean opusLoaded = OpusCodec.loadLibrary();
 			if (!opusLoaded)
@@ -104,6 +110,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 
 			// Initialize panel first (so we can show errors)
 			panel = new TileWhisperPanel(this);
+			panel.setIgnored(ignoreListManager.getAll());
 
 			if (!opusLoaded)
 			{
@@ -435,6 +442,12 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		String senderName = packet.getUsername();
 		java.util.Set<String> friends = cachedFriends;
 
+		// Ignore list takes priority over everything
+		if (ignoreListManager != null && ignoreListManager.isIgnored(senderName))
+		{
+			return;
+		}
+
 		if (!shouldReceiveAudio(senderName, friends, config.friendsOnly(), config.voiceRangeMode()))
 		{
 			return;
@@ -574,5 +587,30 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	public boolean isPlayerMuted(String username)
 	{
 		return audioPlayback != null && audioPlayback.isPlayerMuted(username);
+	}
+
+	public boolean isPlayerIgnored(String username)
+	{
+		return ignoreListManager != null && ignoreListManager.isIgnored(username);
+	}
+
+	public void setPlayerIgnored(String username, boolean ignored)
+	{
+		if (ignoreListManager == null)
+		{
+			return;
+		}
+		if (ignored)
+		{
+			ignoreListManager.ignore(username);
+		}
+		else
+		{
+			ignoreListManager.unignore(username);
+		}
+		if (panel != null)
+		{
+			panel.setIgnored(ignoreListManager.getAll());
+		}
 	}
 }

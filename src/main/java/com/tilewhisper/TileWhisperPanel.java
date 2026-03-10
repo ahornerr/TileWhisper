@@ -22,6 +22,7 @@ public class TileWhisperPanel extends PluginPanel
 	private static final Color TEXT_COLOR = new Color(255, 255, 255);
 	private static final Color SPEAKING_COLOR = new Color(0, 200, 83);
 	private static final Color FRIEND_COLOR = new Color(255, 200, 50); // Gold for friends
+	private static final Color IGNORED_COLOR = new Color(120, 120, 120); // Dim grey for ignored
 	private static final Color PANEL_BG = new Color(60, 60, 60);
 	private static final Color BUTTON_BG = new Color(80, 80, 80);
 	private static final Color BUTTON_HOVER = new Color(100, 100, 100);
@@ -43,6 +44,9 @@ public class TileWhisperPanel extends PluginPanel
 
 	// Friend set for showing friend indicators (updated from plugin on game tick)
 	private Set<String> friends = Collections.emptySet();
+
+	// Ignored players (updated from plugin on ignore list change)
+	private Set<String> ignored = Collections.emptySet();
 
 	@Inject
 	public TileWhisperPanel(TileWhisperPlugin plugin)
@@ -171,6 +175,13 @@ public class TileWhisperPanel extends PluginPanel
 		updatePlayerList();
 	}
 
+	/** Called from plugin when the ignore list changes. */
+	public void setIgnored(Set<String> ignored)
+	{
+		this.ignored = ignored;
+		updatePlayerList();
+	}
+
 	public void markPlayerSpeaking(String username)
 	{
 		speakingTimestamps.put(username, System.currentTimeMillis());
@@ -215,11 +226,12 @@ public class TileWhisperPanel extends PluginPanel
 		String username = player.getUsername();
 		boolean speaking = isPlayerSpeaking(username);
 		boolean isFriend = friends.contains(username);
+		boolean isIgnored = ignored.contains(username);
 		boolean muted = plugin.isPlayerMuted(username);
 		float volume = plugin.getPlayerVolume(username);
 
 		JPanel panel = new JPanel(new BorderLayout(5, 0));
-		panel.setBackground(speaking ? PANEL_BG.brighter() : PANEL_BG);
+		panel.setBackground((isIgnored || speaking) ? PANEL_BG.brighter() : PANEL_BG);
 		panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
 		panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 70));
 
@@ -227,13 +239,22 @@ public class TileWhisperPanel extends PluginPanel
 		JPanel leftPanel = new JPanel(new BorderLayout());
 		leftPanel.setOpaque(false);
 
-		// Show a star prefix for friends
 		String nameText = isFriend ? "\u2605 " + username : username;
+		if (isIgnored)
+		{
+			nameText = nameText + " \u26D4"; // Add shield for ignored
+		}
+
 		JLabel nameLabel = new JLabel(nameText);
 		if (speaking)
 		{
 			nameLabel.setForeground(SPEAKING_COLOR);
 			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.BOLD, 12f));
+		}
+		else if (isIgnored)
+		{
+			nameLabel.setForeground(IGNORED_COLOR);
+			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
 		}
 		else if (isFriend)
 		{
@@ -245,23 +266,35 @@ public class TileWhisperPanel extends PluginPanel
 			nameLabel.setForeground(TEXT_COLOR);
 			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
 		}
-		nameLabel.setToolTipText(isFriend ? username + " (friend)" : username);
+
+		String tooltipText = username;
+		if (isFriend) tooltipText += " (friend)";
+		if (isIgnored) tooltipText += " (ignored)";
+		nameLabel.setToolTipText(tooltipText);
 		leftPanel.add(nameLabel, BorderLayout.NORTH);
 
 		JLabel distanceLabel = new JLabel(getDistanceText(player));
-		distanceLabel.setForeground(new Color(180, 180, 180));
+		distanceLabel.setForeground(isIgnored ? IGNORED_COLOR : new Color(180, 180, 180));
 		distanceLabel.setFont(distanceLabel.getFont().deriveFont(Font.PLAIN, 11f));
 		leftPanel.add(distanceLabel, BorderLayout.SOUTH);
 
 		panel.add(leftPanel, BorderLayout.WEST);
 
-		// Right side: Mute button and volume slider
+		// Right side: Mute button, ignore button, volume slider
 		JPanel rightPanel = new JPanel(new BorderLayout(5, 0));
 		rightPanel.setOpaque(false);
-		rightPanel.setPreferredSize(new Dimension(100, 60));
+		rightPanel.setPreferredSize(new Dimension(120, 60));
+
+		JPanel buttonsPanel = new JPanel(new BorderLayout(5, 0));
+		buttonsPanel.setOpaque(false);
 
 		JButton muteButton = createMuteButton(username, muted);
-		rightPanel.add(muteButton, BorderLayout.NORTH);
+		buttonsPanel.add(muteButton, BorderLayout.WEST);
+
+		JButton ignoreButton = createIgnoreButton(username, isIgnored);
+		buttonsPanel.add(ignoreButton, BorderLayout.EAST);
+
+		rightPanel.add(buttonsPanel, BorderLayout.NORTH);
 
 		JSlider volumeSlider = new JSlider(0, 200, (int) (volume * 100));
 		volumeSlider.setMajorTickSpacing(100);
@@ -308,6 +341,45 @@ public class TileWhisperPanel extends PluginPanel
 			button.setText(newMuted ? "\uD83D\uDD07" : "\uD83D\uDD0A");
 			button.setForeground(newMuted ? new Color(244, 67, 54) : TEXT_COLOR);
 			button.setToolTipText(newMuted ? "Unmute player" : "Mute player");
+		});
+
+		button.addMouseListener(new java.awt.event.MouseAdapter()
+		{
+			@Override
+			public void mouseEntered(java.awt.event.MouseEvent e)
+			{
+				button.setBackground(BUTTON_HOVER);
+			}
+
+			@Override
+			public void mouseExited(java.awt.event.MouseEvent e)
+			{
+				button.setBackground(BUTTON_BG);
+			}
+		});
+
+		return button;
+	}
+
+	private JButton createIgnoreButton(String username, boolean ignored)
+	{
+		JButton button = new JButton(ignored ? "\uD83D\uDD13" : "\uD83D\uDED4"); // 🚫 or 🛡️
+		button.setPreferredSize(new Dimension(50, 24));
+		button.setFocusPainted(false);
+		button.setContentAreaFilled(false);
+		button.setOpaque(true);
+		button.setBackground(BUTTON_BG);
+		button.setForeground(ignored ? new Color(244, 67, 54) : TEXT_COLOR);
+		button.setBorder(BorderFactory.createEmptyBorder(2, 5, 2, 5));
+		button.setToolTipText(ignored ? "Unignore player" : "Ignore player (persistent)");
+
+		button.addActionListener((ActionEvent e) -> {
+			boolean newIgnored = !plugin.isPlayerIgnored(username);
+			plugin.setPlayerIgnored(username, newIgnored);
+			button.setText(newIgnored ? "\uD83D\uDD13" : "\uD83D\uDED4");
+			button.setForeground(newIgnored ? new Color(244, 67, 54) : TEXT_COLOR);
+			button.setToolTipText(newIgnored ? "Unignore player" : "Ignore player (persistent)");
+			updatePlayerList(); // Refresh panel to show ignored status
 		});
 
 		button.addMouseListener(new java.awt.event.MouseAdapter()
