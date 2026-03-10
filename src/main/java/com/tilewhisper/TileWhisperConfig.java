@@ -40,6 +40,36 @@ public interface TileWhisperConfig extends Config
 		return VoiceActivationMode.PTT;
 	}
 
+	enum VoiceRangeMode
+	{
+		PROXIMITY("Proximity (nearby players)"),
+		FRIENDS_CHAT("Friends Chat (FC members)"),
+		BOTH("Both (Proximity + Friends)");
+
+		public final String label;
+
+		VoiceRangeMode(String label)
+		{
+			this.label = label;
+		}
+
+		@Override
+		public String toString()
+		{
+			return label;
+		}
+	}
+
+	@ConfigItem(
+		keyName = "voiceRangeMode",
+		name = "Voice Range Mode",
+		description = "Choose who can hear your voice"
+	)
+	default VoiceRangeMode voiceRangeMode()
+	{
+		return VoiceRangeMode.PROXIMITY;
+	}
+
 	@ConfigItem(
 		keyName = "pushToTalkKey",
 		name = "Push to Talk",
@@ -110,6 +140,16 @@ public interface TileWhisperConfig extends Config
 		description = "Mute all incoming voice chat"
 	)
 	default boolean muteAudio()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "friendsOnly",
+		name = "Friends Only",
+		description = "Only hear and be heard by players on your OSRS friends list"
+	)
+	default boolean friendsOnly()
 	{
 		return false;
 	}

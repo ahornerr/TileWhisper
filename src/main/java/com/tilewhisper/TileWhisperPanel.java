@@ -9,9 +9,11 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class TileWhisperPanel extends PluginPanel
 {
@@ -19,6 +21,7 @@ public class TileWhisperPanel extends PluginPanel
 	private static final Color DISCONNECTED_COLOR = new Color(244, 67, 54);
 	private static final Color TEXT_COLOR = new Color(255, 255, 255);
 	private static final Color SPEAKING_COLOR = new Color(0, 200, 83);
+	private static final Color FRIEND_COLOR = new Color(255, 200, 50); // Gold for friends
 	private static final Color PANEL_BG = new Color(60, 60, 60);
 	private static final Color BUTTON_BG = new Color(80, 80, 80);
 	private static final Color BUTTON_HOVER = new Color(100, 100, 100);
@@ -35,8 +38,11 @@ public class TileWhisperPanel extends PluginPanel
 
 	// Track speaking players with timestamps for fade-out
 	private final Map<String, Long> speakingTimestamps = new HashMap<>();
-	private static final long SPEAKING_TIMEOUT_MS = 500; // 500ms fade-out
+	private static final long SPEAKING_TIMEOUT_MS = 500;
 	private javax.swing.Timer speakingTimer;
+
+	// Friend set for showing friend indicators (updated from plugin on game tick)
+	private Set<String> friends = Collections.emptySet();
 
 	@Inject
 	public TileWhisperPanel(TileWhisperPlugin plugin)
@@ -83,7 +89,6 @@ public class TileWhisperPanel extends PluginPanel
 
 		add(scrollPane, BorderLayout.CENTER);
 
-		// Start speaking indicator update timer
 		startSpeakingTimer();
 	}
 
@@ -98,7 +103,6 @@ public class TileWhisperPanel extends PluginPanel
 		long now = System.currentTimeMillis();
 		boolean needUpdate = false;
 
-		// Remove expired speaking timestamps
 		for (Map.Entry<String, Long> entry : speakingTimestamps.entrySet())
 		{
 			if (now - entry.getValue() > SPEAKING_TIMEOUT_MS)
@@ -110,7 +114,6 @@ public class TileWhisperPanel extends PluginPanel
 
 		if (needUpdate)
 		{
-			// Clean up expired entries
 			speakingTimestamps.entrySet().removeIf(entry ->
 				now - entry.getValue() > SPEAKING_TIMEOUT_MS
 			);
@@ -120,7 +123,8 @@ public class TileWhisperPanel extends PluginPanel
 
 	public void setConnected(boolean connected)
 	{
-		SwingUtilities.invokeLater(() -> {			if (connected)
+		SwingUtilities.invokeLater(() -> {
+			if (connected)
 			{
 				connectionLabel.setText("Connected");
 				connectionLabel.setForeground(CONNECTED_COLOR);
@@ -133,9 +137,6 @@ public class TileWhisperPanel extends PluginPanel
 		});
 	}
 
-	/**
-	 * Show an error message in the panel header (e.g. Opus failed to load).
-	 */
 	public void showError(String message)
 	{
 		SwingUtilities.invokeLater(() -> {
@@ -163,17 +164,18 @@ public class TileWhisperPanel extends PluginPanel
 		updatePlayerList();
 	}
 
-	/**
-	 * Mark a player as currently speaking (called when audio is received).
-	 */
+	/** Called from plugin on game tick with the current friends list. */
+	public void setFriends(Set<String> friends)
+	{
+		this.friends = friends;
+		updatePlayerList();
+	}
+
 	public void markPlayerSpeaking(String username)
 	{
 		speakingTimestamps.put(username, System.currentTimeMillis());
 	}
 
-	/**
-	 * Check if a player is currently speaking.
-	 */
 	private boolean isPlayerSpeaking(String username)
 	{
 		Long timestamp = speakingTimestamps.get(username);
@@ -212,6 +214,7 @@ public class TileWhisperPanel extends PluginPanel
 	{
 		String username = player.getUsername();
 		boolean speaking = isPlayerSpeaking(username);
+		boolean isFriend = friends.contains(username);
 		boolean muted = plugin.isPlayerMuted(username);
 		float volume = plugin.getPlayerVolume(username);
 
@@ -220,13 +223,29 @@ public class TileWhisperPanel extends PluginPanel
 		panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
 		panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 70));
 
-		// Left side: Name and distance
+		// Left side: Name (with friend star) and distance
 		JPanel leftPanel = new JPanel(new BorderLayout());
 		leftPanel.setOpaque(false);
 
-		JLabel nameLabel = new JLabel(username);
-		nameLabel.setForeground(speaking ? SPEAKING_COLOR : TEXT_COLOR);
-		nameLabel.setFont(nameLabel.getFont().deriveFont(speaking ? Font.BOLD : Font.PLAIN, 12f));
+		// Show a star prefix for friends
+		String nameText = isFriend ? "\u2605 " + username : username;
+		JLabel nameLabel = new JLabel(nameText);
+		if (speaking)
+		{
+			nameLabel.setForeground(SPEAKING_COLOR);
+			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.BOLD, 12f));
+		}
+		else if (isFriend)
+		{
+			nameLabel.setForeground(FRIEND_COLOR);
+			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
+		}
+		else
+		{
+			nameLabel.setForeground(TEXT_COLOR);
+			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
+		}
+		nameLabel.setToolTipText(isFriend ? username + " (friend)" : username);
 		leftPanel.add(nameLabel, BorderLayout.NORTH);
 
 		JLabel distanceLabel = new JLabel(getDistanceText(player));
@@ -241,17 +260,15 @@ public class TileWhisperPanel extends PluginPanel
 		rightPanel.setOpaque(false);
 		rightPanel.setPreferredSize(new Dimension(100, 60));
 
-		// Mute button
 		JButton muteButton = createMuteButton(username, muted);
 		rightPanel.add(muteButton, BorderLayout.NORTH);
 
-		// Volume slider
-		JSlider volumeSlider = new JSlider(0, 200, (int)(volume * 100));
+		JSlider volumeSlider = new JSlider(0, 200, (int) (volume * 100));
 		volumeSlider.setMajorTickSpacing(100);
 		volumeSlider.setMinorTickSpacing(50);
 		volumeSlider.setPaintTicks(true);
 		volumeSlider.setPreferredSize(new Dimension(80, 30));
-		volumeSlider.setToolTipText("Volume: " + (int)(volume * 100) + "%");
+		volumeSlider.setToolTipText("Volume: " + (int) (volume * 100) + "%");
 		volumeSlider.addChangeListener(e -> {
 			float newVolume = volumeSlider.getValue() / 100.0f;
 			plugin.setPlayerVolume(username, newVolume);
@@ -275,7 +292,7 @@ public class TileWhisperPanel extends PluginPanel
 
 	private JButton createMuteButton(String username, boolean muted)
 	{
-		JButton button = new JButton(muted ? "🔇" : "🔊");
+		JButton button = new JButton(muted ? "\uD83D\uDD07" : "\uD83D\uDD0A");
 		button.setPreferredSize(new Dimension(50, 24));
 		button.setFocusPainted(false);
 		button.setContentAreaFilled(false);
@@ -288,12 +305,13 @@ public class TileWhisperPanel extends PluginPanel
 		button.addActionListener((ActionEvent e) -> {
 			boolean newMuted = !plugin.isPlayerMuted(username);
 			plugin.setPlayerMuted(username, newMuted);
-			button.setText(newMuted ? "🔇" : "🔊");
+			button.setText(newMuted ? "\uD83D\uDD07" : "\uD83D\uDD0A");
 			button.setForeground(newMuted ? new Color(244, 67, 54) : TEXT_COLOR);
 			button.setToolTipText(newMuted ? "Unmute player" : "Mute player");
 		});
 
-		button.addMouseListener(new java.awt.event.MouseAdapter() {
+		button.addMouseListener(new java.awt.event.MouseAdapter()
+		{
 			@Override
 			public void mouseEntered(java.awt.event.MouseEvent e)
 			{
@@ -324,9 +342,6 @@ public class TileWhisperPanel extends PluginPanel
 		return distance + " tile" + (distance == 1 ? "" : "s");
 	}
 
-	/**
-	 * Clean up resources when the plugin shuts down.
-	 */
 	public void shutdown()
 	{
 		if (speakingTimer != null)
