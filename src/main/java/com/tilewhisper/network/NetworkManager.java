@@ -39,8 +39,8 @@ public class NetworkManager
 
 	private String currentUrl;
 	private volatile HttpClient httpClient;
-	// 1 permit = one audio send at a time; released in whenComplete (fires for success AND failure)
-	private final java.util.concurrent.Semaphore audioSendPermit = new java.util.concurrent.Semaphore(1);
+	// 3 permits allows pipelining audio sends without dropping frames on typical latency
+	private final java.util.concurrent.Semaphore audioSendPermit = new java.util.concurrent.Semaphore(3);
 
 	public NetworkManager(
 		Consumer<List<NearbyPlayer>> onNearbyPlayers,
@@ -73,13 +73,24 @@ public class NetworkManager
 			URI uri = URI.create(currentUrl);
 			log.info("Connecting to TileWhisper server: {}", uri);
 
-			webSocket = httpClient.newWebSocketBuilder()
+			// Non-blocking connect — avoid freezing the calling thread
+			httpClient.newWebSocketBuilder()
 				.buildAsync(uri, new WebSocketListener())
-				.join();
+				.whenComplete((ws, ex) -> {
+					if (ex != null)
+					{
+						log.error("Failed to connect to server", ex);
+						scheduleReconnect();
+					}
+					else
+					{
+						webSocket = ws;
+					}
+				});
 		}
 		catch (Exception e)
 		{
-			log.error("Failed to connect to server", e);
+			log.error("Failed to initiate connection to server", e);
 			scheduleReconnect();
 		}
 	}
@@ -126,10 +137,10 @@ public class NetworkManager
 			return;
 		}
 
-		// Non-blocking tryAcquire: drop frame if previous send still in flight
+		// Non-blocking tryAcquire: drop frame only if 3+ sends are already in flight
 		if (!audioSendPermit.tryAcquire())
 		{
-			log.debug("Dropping audio frame: send pending");
+			log.debug("Dropping audio frame: {} sends pending", 3 - audioSendPermit.availablePermits());
 			return;
 		}
 

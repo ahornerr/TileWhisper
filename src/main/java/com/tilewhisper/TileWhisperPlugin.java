@@ -15,6 +15,7 @@ import net.runelite.client.input.KeyListener;
 import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.input.KeyManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -75,6 +76,13 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private volatile long lastTransmitTime = 0;
 	private static final long TRANSMIT_INDICATOR_TIMEOUT_MS = 200;
 
+	// Cached player state — written on client thread (onGameTick), read from audio threads
+	private volatile int cachedWorld;
+	private volatile int cachedX;
+	private volatile int cachedY;
+	private volatile int cachedPlane;
+	private volatile String cachedUsername;
+
 	@Override
 	protected void startUp()
 	{
@@ -126,24 +134,22 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 					}
 
 					// Update transmitting flag for overlay
-					long now = System.currentTimeMillis();
 					if (shouldSend)
 					{
-						lastTransmitTime = now;
+						lastTransmitTime = System.currentTimeMillis();
 					}
 
-					WorldPoint localPos = client.getLocalPlayer() != null
-						? client.getLocalPlayer().getWorldLocation()
-						: null;
-
-					if (localPos != null && shouldSend && networkManager != null)
+					// Use cached player state (updated on client thread in onGameTick)
+					// to avoid thread-safety issues with client.getLocalPlayer()
+					String username = cachedUsername;
+					if (username != null && shouldSend && networkManager != null)
 					{
 						networkManager.sendAudio(
-							client.getWorld(),
-							localPos.getX(),
-							localPos.getY(),
-							localPos.getPlane(),
-							client.getLocalPlayer().getName(),
+							cachedWorld,
+							cachedX,
+							cachedY,
+							cachedPlane,
+							username,
 							encoded
 						);
 					}
@@ -255,41 +261,67 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			panel = null;
 		}
 
+		cachedUsername = null;
+
 		log.info("TileWhisper plugin stopped");
 	}
 
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
-		if (networkManager == null)
-		{
-			return;
-		}
-
 		if (client.getGameState() != GameState.LOGGED_IN)
 		{
+			cachedUsername = null;
 			return;
 		}
 
 		if (client.getLocalPlayer() == null)
 		{
+			cachedUsername = null;
 			return;
 		}
 
+		// Cache player state for audio threads (thread-safe volatile writes)
 		WorldPoint localPos = client.getLocalPlayer().getWorldLocation();
-		int world = client.getWorld();
+		cachedWorld = client.getWorld();
+		cachedX = localPos.getX();
+		cachedY = localPos.getY();
+		cachedPlane = localPos.getPlane();
+		cachedUsername = client.getLocalPlayer().getName();
 
-		networkManager.sendPresence(
-			world,
-			localPos.getX(),
-			localPos.getY(),
-			localPos.getPlane(),
-			client.getLocalPlayer().getName()
-		);
+		if (networkManager != null)
+		{
+			networkManager.sendPresence(
+				cachedWorld,
+				cachedX,
+				cachedY,
+				cachedPlane,
+				cachedUsername
+			);
+		}
 
 		if (panel != null)
 		{
 			panel.updateNearbyPlayers(localPos);
+		}
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!"tilewhisper".equals(event.getGroup()))
+		{
+			return;
+		}
+
+		if (audioCapture != null)
+		{
+			audioCapture.setVoiceActivation(config.voiceActivation(), config.vadThreshold());
+		}
+
+		if (audioPlayback != null)
+		{
+			audioPlayback.setOutputVolume(config.outputVolume());
 		}
 	}
 
@@ -334,40 +366,42 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			return;
 		}
 
-		clientThread.invokeLater(() -> {
-			if (client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null)
-			{
-				return;
-			}
+		// Use cached player state to compute volume — runs directly on the
+		// WebSocket thread so audio is never bottlenecked by the client thread.
+		String localUsername = cachedUsername;
+		if (localUsername == null)
+		{
+			return; // Not logged in yet
+		}
 
-			WorldPoint localPos = client.getLocalPlayer().getWorldLocation();
+		if (packet.getWorld() != cachedWorld || packet.getPlane() != cachedPlane)
+		{
+			return;
+		}
 
-			if (packet.getWorld() != client.getWorld() || packet.getPlane() != localPos.getPlane())
-			{
-				return;
-			}
+		int dx = Math.abs(packet.getX() - cachedX);
+		int dy = Math.abs(packet.getY() - cachedY);
+		int distance = Math.max(dx, dy);
+		float volumeFactor = Math.max(0f, 1.0f - (float) distance / config.maxRange());
 
-			int dx = Math.abs(packet.getX() - localPos.getX());
-			int dy = Math.abs(packet.getY() - localPos.getY());
-			int distance = Math.max(dx, dy);
-			float volumeFactor = Math.max(0f, 1.0f - (float) distance / config.maxRange());
+		if (volumeFactor > 0 && audioPlayback != null)
+		{
+			audioPlayback.playAudio(packet.getUsername(), audioData, volumeFactor);
+		}
 
-			if (volumeFactor > 0 && audioPlayback != null)
-			{
-				audioPlayback.playAudio(packet.getUsername(), audioData, volumeFactor);
-			}
-
-			if (playerOverlay != null && volumeFactor > 0)
+		// UI updates are lightweight — dispatch to client thread
+		if (volumeFactor > 0)
+		{
+			if (playerOverlay != null)
 			{
 				playerOverlay.markPlayerTransmitting(packet.getUsername());
 			}
 
-			// Update panel speaking indicator
-			if (panel != null && volumeFactor > 0)
+			if (panel != null)
 			{
 				panel.markPlayerSpeaking(packet.getUsername());
 			}
-		});
+		}
 	}
 
 	private void onNearbyPlayersReceived(List<NearbyPlayer> players)
