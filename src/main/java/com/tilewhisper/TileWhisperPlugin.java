@@ -435,29 +435,19 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		String senderName = packet.getUsername();
 		java.util.Set<String> friends = cachedFriends;
 
-		// Check voice range mode
-		boolean isFriendsChat = config.voiceRangeMode() == TileWhisperConfig.VoiceRangeMode.FRIENDS_CHAT;
-		boolean isBoth = config.voiceRangeMode() == TileWhisperConfig.VoiceRangeMode.BOTH;
-		boolean senderIsFriend = friends.contains(senderName);
-		boolean senderIsInFC = isFriendsChat && senderIsFriend;
-
-		// Check friends-only mode
-		if (config.friendsOnly() && !senderIsFriend)
+		if (!shouldReceiveAudio(senderName, friends, config.friendsOnly(), config.voiceRangeMode()))
 		{
 			return;
 		}
 
-		// If in FC mode but sender is not in FC (and not a friend in BOTH mode), skip
-		if (isFriendsChat && !senderIsFriend)
-		{
-			return;
-		}
+		// FC mode sends at full volume regardless of tile distance
+		boolean isFCOnlyMode = config.voiceRangeMode() == TileWhisperConfig.VoiceRangeMode.FRIENDS_CHAT
+			&& friends != null && friends.contains(senderName);
 
-		// Calculate volume based on distance (unless in FC mode which bypasses proximity)
 		float volumeFactor;
-		if (isFriendsChat && senderIsFriend)
+		if (isFCOnlyMode)
 		{
-			volumeFactor = 1.0f; // Full volume for FC members regardless of distance
+			volumeFactor = 1.0f;
 		}
 		else
 		{
@@ -472,7 +462,6 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 			audioPlayback.playAudio(senderName, audioData, volumeFactor);
 		}
 
-		// UI updates are lightweight — dispatch to client thread
 		if (volumeFactor > 0)
 		{
 			if (playerOverlay != null)
@@ -485,6 +474,39 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 				panel.markPlayerSpeaking(senderName);
 			}
 		}
+	}
+
+	/**
+	 * Decides whether audio from {@code senderName} should be played, given
+	 * the current friends set, friends-only mode, and voice range mode.
+	 * Package-private and static so it can be unit-tested without a RuneLite runtime.
+	 */
+	static boolean shouldReceiveAudio(
+		String senderName,
+		java.util.Set<String> friends,
+		boolean friendsOnly,
+		TileWhisperConfig.VoiceRangeMode voiceRangeMode)
+	{
+		if (senderName == null || friends == null)
+		{
+			return false;
+		}
+
+		boolean senderIsFriend = friends.contains(senderName);
+
+		// Friends-only gate: applies regardless of voice range mode
+		if (friendsOnly && !senderIsFriend)
+		{
+			return false;
+		}
+
+		// FRIENDS_CHAT mode: only allow FC members (stored in the friends set)
+		if (voiceRangeMode == TileWhisperConfig.VoiceRangeMode.FRIENDS_CHAT && !senderIsFriend)
+		{
+			return false;
+		}
+
+		return true;
 	}
 
 	private void onNearbyPlayersReceived(List<NearbyPlayer> players)
