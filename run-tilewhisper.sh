@@ -34,4 +34,8 @@ if [ ! -f "$JAR_FILE" ]; then
 fi
 
 echo "Starting TileWhisper (with -ea enabled)..."
-java -ea -jar "$JAR_FILE" --developer-mode --debug
+java -ea \
+  --add-opens java.desktop/com.apple.eawt=ALL-UNNAMED \
+  --add-opens java.desktop/com.apple.eawt.event=ALL-UNNAMED \
+  --add-opens java.desktop/com.apple.laf=ALL-UNNAMED \
+  -jar "$JAR_FILE" --developer-mode --debug
