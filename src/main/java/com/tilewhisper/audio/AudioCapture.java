@@ -206,6 +206,16 @@ public class AudioCapture
 			// Apply volume scaling, converting to shorts for encoder
 			applyVolumePcmToShorts(pcmBuf, pcmShorts, volumeScale);
 
+			// Warn if captured audio is silence (possible macOS microphone permission issue)
+			if (frameCounter % 50 == 0)
+			{
+				int rms = calculateRMS(pcmBuf);
+				if (rms < 10)
+				{
+					log.warn("Captured audio is near-silence (RMS={}). On macOS, check microphone permission in System Settings → Privacy & Security → Microphone.", rms);
+				}
+			}
+
 			// Encode PCM -> Opus
 			try
 			{
