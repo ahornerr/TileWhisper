@@ -3,6 +3,7 @@ package com.tilewhisper;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
 import net.runelite.client.config.Keybind;
 import net.runelite.client.config.Range;
 
@@ -11,10 +12,41 @@ import java.awt.event.KeyEvent;
 @ConfigGroup("tilewhisper")
 public interface TileWhisperConfig extends Config
 {
+	@ConfigSection(
+		name = "Voice Activation",
+		description = "How and when your microphone transmits",
+		position = 0
+	)
+	String activationSection = "activation";
+
+	@ConfigSection(
+		name = "Range & Filtering",
+		description = "Who you hear and how far",
+		position = 1
+	)
+	String rangeSection = "range";
+
+	@ConfigSection(
+		name = "Volume",
+		description = "Microphone and speaker levels",
+		position = 2
+	)
+	String volumeSection = "volume";
+
+	@ConfigSection(
+		name = "Advanced",
+		description = "Server connection settings",
+		position = 3,
+		closedByDefault = true
+	)
+	String advancedSection = "advanced";
+
+	// --- Voice Activation ---
+
 	enum VoiceActivationMode
 	{
-		PTT("Push-to-Talk (hold key)"),
-		VAD("Voice Activity Detection");
+		PTT("Push-to-Talk"),
+		VAD("Voice Activity (auto)");
 
 		public final String label;
 
@@ -32,19 +64,48 @@ public interface TileWhisperConfig extends Config
 
 	@ConfigItem(
 		keyName = "voiceActivation",
-		name = "Voice Activation",
-		description = "Choose how voice is activated"
+		name = "Activation Mode",
+		description = "PTT: hold a key to talk. VAD: auto-transmit when mic level exceeds threshold.",
+		section = activationSection,
+		position = 0
 	)
 	default VoiceActivationMode voiceActivation()
 	{
 		return VoiceActivationMode.PTT;
 	}
 
+	@ConfigItem(
+		keyName = "pushToTalkKey",
+		name = "PTT Key",
+		description = "Hold this key to transmit (PTT mode only)",
+		section = activationSection,
+		position = 1
+	)
+	default Keybind pushToTalkKey()
+	{
+		return new Keybind(KeyEvent.VK_V, 0);
+	}
+
+	@Range(min = 0, max = 100)
+	@ConfigItem(
+		keyName = "vadThreshold",
+		name = "VAD Sensitivity",
+		description = "Mic level that triggers auto-transmit (VAD mode). Higher = less sensitive.",
+		section = activationSection,
+		position = 2
+	)
+	default int vadThreshold()
+	{
+		return 5;
+	}
+
+	// --- Range & Filtering ---
+
 	enum VoiceRangeMode
 	{
-		PROXIMITY("Proximity (nearby players)"),
-		FRIENDS_CHAT("Friends Chat (FC members)"),
-		BOTH("Both (Proximity + Friends)");
+		PROXIMITY("Proximity"),
+		FRIENDS_CHAT("Friends Chat"),
+		BOTH("Proximity + Friends");
 
 		public final String label;
 
@@ -62,51 +123,62 @@ public interface TileWhisperConfig extends Config
 
 	@ConfigItem(
 		keyName = "voiceRangeMode",
-		name = "Voice Range Mode",
-		description = "Choose who can hear your voice"
+		name = "Range Mode",
+		description = "Proximity: nearby players. Friends Chat: FC members. Both: either.",
+		section = rangeSection,
+		position = 0
 	)
 	default VoiceRangeMode voiceRangeMode()
 	{
 		return VoiceRangeMode.PROXIMITY;
 	}
 
-	@ConfigItem(
-		keyName = "pushToTalkKey",
-		name = "Push to Talk",
-		description = "Hold this key to transmit voice (only used in PTT mode)"
-	)
-	default Keybind pushToTalkKey()
-	{
-		return new Keybind(KeyEvent.VK_V, 0);
-	}
-
-	@Range(min = 0, max = 100)
-	@ConfigItem(
-		keyName = "vadThreshold",
-		name = "VAD Threshold",
-		description = "Microphone level (0-100) that triggers auto-transmit in VAD mode. Higher = less sensitive."
-	)
-	default int vadThreshold()
-	{
-		return 5;
-	}
-
 	@Range(min = 1, max = 50)
 	@ConfigItem(
 		keyName = "maxRange",
-		name = "Voice Range (tiles)",
-		description = "Maximum tile distance to hear other players"
+		name = "Max Range (tiles)",
+		description = "Maximum tile distance at which players can be heard",
+		section = rangeSection,
+		position = 1
 	)
 	default int maxRange()
 	{
 		return 15;
 	}
 
+	@ConfigItem(
+		keyName = "friendsOnly",
+		name = "Friends Only",
+		description = "Only hear (and be heard by) players on your friends list",
+		section = rangeSection,
+		position = 2
+	)
+	default boolean friendsOnly()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "muteAudio",
+		name = "Mute Incoming Audio",
+		description = "Mute all incoming voice chat",
+		section = rangeSection,
+		position = 3
+	)
+	default boolean muteAudio()
+	{
+		return false;
+	}
+
+	// --- Volume ---
+
 	@Range(min = 0, max = 200)
 	@ConfigItem(
 		keyName = "inputVolume",
-		name = "Microphone Volume %",
-		description = "Microphone input gain (100 = normal)"
+		name = "Mic Gain (%)",
+		description = "Microphone input gain. 100 = normal, 150 = boosted.",
+		section = volumeSection,
+		position = 0
 	)
 	default int inputVolume()
 	{
@@ -116,41 +188,27 @@ public interface TileWhisperConfig extends Config
 	@Range(min = 0, max = 200)
 	@ConfigItem(
 		keyName = "outputVolume",
-		name = "Output Volume %",
-		description = "Speaker output gain (100 = normal)"
+		name = "Speaker Volume (%)",
+		description = "Output volume for incoming voice. 100 = normal.",
+		section = volumeSection,
+		position = 1
 	)
 	default int outputVolume()
 	{
 		return 150;
 	}
 
+	// --- Advanced ---
+
 	@ConfigItem(
 		keyName = "serverUrl",
 		name = "Server URL",
-		description = "WebSocket relay server URL"
+		description = "WebSocket relay server URL",
+		section = advancedSection,
+		position = 0
 	)
 	default String serverUrl()
 	{
 		return "wss://tilewhisper.horner.codes";
-	}
-
-	@ConfigItem(
-		keyName = "muteAudio",
-		name = "Mute Incoming Audio",
-		description = "Mute all incoming voice chat"
-	)
-	default boolean muteAudio()
-	{
-		return false;
-	}
-
-	@ConfigItem(
-		keyName = "friendsOnly",
-		name = "Friends Only",
-		description = "Only hear and be heard by players on your OSRS friends list"
-	)
-	default boolean friendsOnly()
-	{
-		return false;
 	}
 }
