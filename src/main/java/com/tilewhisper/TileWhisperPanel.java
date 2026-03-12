@@ -8,88 +8,108 @@ import net.runelite.client.ui.PluginPanel;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
+import java.util.*;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class TileWhisperPanel extends PluginPanel
 {
 	private static final Color CONNECTED_COLOR = new Color(76, 175, 80);
 	private static final Color DISCONNECTED_COLOR = new Color(244, 67, 54);
-	private static final Color TEXT_COLOR = new Color(255, 255, 255);
+	private static final Color TEXT_COLOR = new Color(220, 220, 220);
 	private static final Color SPEAKING_COLOR = new Color(0, 200, 83);
-	private static final Color FRIEND_COLOR = new Color(255, 200, 50); // Gold for friends
-	private static final Color IGNORED_COLOR = new Color(120, 120, 120); // Dim grey for ignored
-	private static final Color PANEL_BG = new Color(60, 60, 60);
-	private static final Color BUTTON_BG = new Color(80, 80, 80);
+	private static final Color FRIEND_COLOR = new Color(255, 200, 50);
+	private static final Color IGNORED_COLOR = new Color(120, 120, 120);
+	private static final Color PANEL_BG = new Color(50, 50, 50);
+	private static final Color PLAYER_BG = new Color(60, 60, 60);
+	private static final Color PLAYER_BG_SPEAKING = new Color(40, 70, 50);
+	private static final Color BUTTON_BG = new Color(75, 75, 75);
 	private static final Color BUTTON_HOVER = new Color(100, 100, 100);
 
 	private final TileWhisperPlugin plugin;
 	private final JLabel connectionLabel;
 	private final JLabel errorLabel;
-	private final JLabel headerLabel;
 	private final JPanel playersPanel;
-	private final JScrollPane scrollPane;
+	private final JLabel noPlayersLabel;
 
 	private volatile List<NearbyPlayer> nearbyPlayers = new ArrayList<>();
 	private WorldPoint localPosition;
 
-	// Track speaking players with timestamps for fade-out (ConcurrentHashMap for thread-safety)
-	private final Map<String, Long> speakingTimestamps = new java.util.concurrent.ConcurrentHashMap<>();
+	private final Map<String, Long> speakingTimestamps = new ConcurrentHashMap<>();
 	private static final long SPEAKING_TIMEOUT_MS = 500;
 	private javax.swing.Timer speakingTimer;
 
-	// Friend set for showing friend indicators (updated from plugin on game tick)
 	private Set<String> friends = Collections.emptySet();
-
-	// Ignored players (updated from plugin on ignore list change)
 	private Set<String> ignored = Collections.emptySet();
+
+	/** Persistent per-player row widgets — survive list refreshes. */
+	private static final class PlayerRow
+	{
+		JPanel panel;
+		JLabel nameLabel;
+		JLabel distanceLabel;
+		JButton muteButton;
+		JSlider volumeSlider;
+		boolean sliderDragging = false;
+	}
+
+	private final Map<String, PlayerRow> playerRows = new LinkedHashMap<>();
 
 	@Inject
 	public TileWhisperPanel(TileWhisperPlugin plugin)
 	{
 		this.plugin = plugin;
-		setLayout(new BorderLayout(0, 5));
-		setBackground(Color.DARK_GRAY);
+		setLayout(new BorderLayout(0, 0));
+		setBackground(PANEL_BG);
 
-		// Header section
-		JPanel headerPanel = new JPanel(new BorderLayout());
-		headerPanel.setBackground(Color.DARK_GRAY);
-		headerPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+		// ── Header ──────────────────────────────────────────────────────────
+		JPanel headerPanel = new JPanel();
+		headerPanel.setLayout(new BoxLayout(headerPanel, BoxLayout.Y_AXIS));
+		headerPanel.setBackground(new Color(40, 40, 40));
+		headerPanel.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
 
 		connectionLabel = new JLabel("Not Connected");
 		connectionLabel.setForeground(DISCONNECTED_COLOR);
 		connectionLabel.setFont(connectionLabel.getFont().deriveFont(Font.BOLD, 12f));
-		headerPanel.add(connectionLabel, BorderLayout.NORTH);
+		connectionLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+		headerPanel.add(connectionLabel);
 
 		errorLabel = new JLabel();
-		errorLabel.setForeground(DISCONNECTED_COLOR);
+		errorLabel.setForeground(new Color(255, 120, 120));
 		errorLabel.setFont(errorLabel.getFont().deriveFont(Font.ITALIC, 10f));
 		errorLabel.setVisible(false);
-		headerPanel.add(errorLabel, BorderLayout.CENTER);
+		errorLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+		headerPanel.add(errorLabel);
 
-		headerLabel = new JLabel("<html><body style='text-align:center'><b>Nearby Players</b></body></html>");
-		headerLabel.setForeground(TEXT_COLOR);
-		headerLabel.setHorizontalAlignment(SwingConstants.CENTER);
-		headerPanel.add(headerLabel, BorderLayout.SOUTH);
+		headerPanel.add(Box.createVerticalStrut(6));
+
+		JLabel nearbyHeader = new JLabel("NEARBY PLAYERS");
+		nearbyHeader.setForeground(new Color(150, 150, 150));
+		nearbyHeader.setFont(nearbyHeader.getFont().deriveFont(Font.BOLD, 9f));
+		nearbyHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+		headerPanel.add(nearbyHeader);
 
 		add(headerPanel, BorderLayout.NORTH);
 
-		// Players list
+		// ── Players list ─────────────────────────────────────────────────────
 		playersPanel = new JPanel();
 		playersPanel.setLayout(new BoxLayout(playersPanel, BoxLayout.Y_AXIS));
-		playersPanel.setBackground(Color.DARK_GRAY);
-		playersPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+		playersPanel.setBackground(PANEL_BG);
+		playersPanel.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
 
-		scrollPane = new JScrollPane(playersPanel);
+		noPlayersLabel = new JLabel("No nearby players");
+		noPlayersLabel.setForeground(new Color(130, 130, 130));
+		noPlayersLabel.setFont(noPlayersLabel.getFont().deriveFont(Font.ITALIC, 11f));
+		noPlayersLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+		noPlayersLabel.setBorder(BorderFactory.createEmptyBorder(12, 0, 0, 0));
+
+		JScrollPane scrollPane = new JScrollPane(playersPanel);
 		scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
 		scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
 		scrollPane.setBorder(null);
-		scrollPane.setBackground(Color.DARK_GRAY);
-		scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+		scrollPane.setBackground(PANEL_BG);
+		scrollPane.getViewport().setBackground(PANEL_BG);
+		scrollPane.getVerticalScrollBar().setUnitIncrement(20);
 
 		add(scrollPane, BorderLayout.CENTER);
 
@@ -98,30 +118,18 @@ public class TileWhisperPanel extends PluginPanel
 
 	private void startSpeakingTimer()
 	{
-		speakingTimer = new javax.swing.Timer(50, e -> updateSpeakingIndicators());
+		speakingTimer = new javax.swing.Timer(50, e -> tickSpeakingFade());
 		speakingTimer.start();
 	}
 
-	private void updateSpeakingIndicators()
+	private void tickSpeakingFade()
 	{
 		long now = System.currentTimeMillis();
-		boolean needUpdate = false;
-
-		for (Map.Entry<String, Long> entry : speakingTimestamps.entrySet())
+		boolean any = speakingTimestamps.entrySet().removeIf(entry ->
+			now - entry.getValue() > SPEAKING_TIMEOUT_MS);
+		if (any)
 		{
-			if (now - entry.getValue() > SPEAKING_TIMEOUT_MS)
-			{
-				needUpdate = true;
-				break;
-			}
-		}
-
-		if (needUpdate)
-		{
-			speakingTimestamps.entrySet().removeIf(entry ->
-				now - entry.getValue() > SPEAKING_TIMEOUT_MS
-			);
-			updatePlayerList();
+			refreshSpeakingState();
 		}
 	}
 
@@ -159,172 +167,276 @@ public class TileWhisperPanel extends PluginPanel
 	public void setNearbyPlayers(List<NearbyPlayer> players)
 	{
 		this.nearbyPlayers = players;
-		updatePlayerList();
+		SwingUtilities.invokeLater(this::reconcilePlayerRows);
 	}
 
 	public void updateNearbyPlayers(WorldPoint localPos)
 	{
 		this.localPosition = localPos;
-		updatePlayerList();
+		SwingUtilities.invokeLater(this::refreshDistanceLabels);
 	}
 
-	/** Called from plugin on game tick with the current friends list. */
 	public void setFriends(Set<String> friends)
 	{
 		this.friends = friends;
-		updatePlayerList();
+		SwingUtilities.invokeLater(this::refreshNameStyles);
 	}
 
-	/** Called from plugin when the ignore list changes. */
 	public void setIgnored(Set<String> ignored)
 	{
 		this.ignored = ignored;
-		updatePlayerList();
+		SwingUtilities.invokeLater(this::refreshNameStyles);
 	}
 
 	public void markPlayerSpeaking(String username)
 	{
 		speakingTimestamps.put(username, System.currentTimeMillis());
+		SwingUtilities.invokeLater(() -> {
+			PlayerRow row = playerRows.get(username);
+			if (row != null)
+			{
+				applySpeakingStyle(row, username, true);
+			}
+		});
 	}
 
 	private boolean isPlayerSpeaking(String username)
 	{
-		Long timestamp = speakingTimestamps.get(username);
-		return timestamp != null
-			&& (System.currentTimeMillis() - timestamp) < SPEAKING_TIMEOUT_MS;
+		Long ts = speakingTimestamps.get(username);
+		return ts != null && (System.currentTimeMillis() - ts) < SPEAKING_TIMEOUT_MS;
 	}
 
-	private void updatePlayerList()
+	// ── Panel reconciliation ─────────────────────────────────────────────────
+
+	/**
+	 * Add/remove rows to match the current nearbyPlayers list without
+	 * destroying existing rows (preserves slider positions while dragging).
+	 */
+	private void reconcilePlayerRows()
 	{
-		SwingUtilities.invokeLater(() -> {
-			playersPanel.removeAll();
+		List<NearbyPlayer> current = nearbyPlayers;
+		Set<String> currentNames = new LinkedHashSet<>();
+		for (NearbyPlayer p : current)
+		{
+			currentNames.add(p.getUsername());
+		}
 
-			if (nearbyPlayers.isEmpty())
+		// Remove rows for players no longer nearby
+		Iterator<Map.Entry<String, PlayerRow>> it = playerRows.entrySet().iterator();
+		while (it.hasNext())
+		{
+			Map.Entry<String, PlayerRow> entry = it.next();
+			if (!currentNames.contains(entry.getKey()))
 			{
-				JLabel noPlayersLabel = new JLabel("No nearby players");
-				noPlayersLabel.setForeground(new Color(150, 150, 150));
-				noPlayersLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-				playersPanel.add(noPlayersLabel);
+				it.remove();
 			}
-			else
+		}
+
+		// Add rows for new players
+		for (NearbyPlayer p : current)
+		{
+			if (!playerRows.containsKey(p.getUsername()))
 			{
-				for (NearbyPlayer player : nearbyPlayers)
-				{
-					JPanel playerPanel = createPlayerPanel(player);
-					playersPanel.add(playerPanel);
-					playersPanel.add(Box.createVerticalStrut(3));
-				}
+				playerRows.put(p.getUsername(), createPlayerRow(p.getUsername()));
 			}
-
-			playersPanel.revalidate();
-			playersPanel.repaint();
-		});
-	}
-
-	private JPanel createPlayerPanel(NearbyPlayer player)
-	{
-		String username = player.getUsername();
-		boolean speaking = isPlayerSpeaking(username);
-		boolean isFriend = friends.contains(username);
-		boolean isIgnored = ignored.contains(username);
-		boolean muted = plugin.isPlayerMuted(username);
-		float volume = plugin.getPlayerVolume(username);
-
-		JPanel panel = new JPanel(new BorderLayout(5, 0));
-		panel.setBackground((isIgnored || speaking) ? PANEL_BG.brighter() : PANEL_BG);
-		panel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
-		panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 70));
-
-		// Left side: Name (with friend star) and distance
-		JPanel leftPanel = new JPanel(new BorderLayout());
-		leftPanel.setOpaque(false);
-
-		String nameText = isFriend ? "\u2605 " + username : username;
-		if (isIgnored)
-		{
-			nameText = nameText + " \u26D4"; // Add shield for ignored
 		}
 
-		JLabel nameLabel = new JLabel(nameText);
-		if (speaking)
+		// Rebuild playersPanel in correct order
+		playersPanel.removeAll();
+
+		if (playerRows.isEmpty())
 		{
-			nameLabel.setForeground(SPEAKING_COLOR);
-			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.BOLD, 12f));
-		}
-		else if (isIgnored)
-		{
-			nameLabel.setForeground(IGNORED_COLOR);
-			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
-		}
-		else if (isFriend)
-		{
-			nameLabel.setForeground(FRIEND_COLOR);
-			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
+			playersPanel.add(noPlayersLabel);
 		}
 		else
 		{
-			nameLabel.setForeground(TEXT_COLOR);
-			nameLabel.setFont(nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
+			boolean first = true;
+			for (String name : currentNames)
+			{
+				PlayerRow row = playerRows.get(name);
+				if (row == null) continue;
+
+				if (!first)
+				{
+					JSeparator sep = new JSeparator();
+					sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+					sep.setForeground(new Color(70, 70, 70));
+					playersPanel.add(sep);
+				}
+				first = false;
+				playersPanel.add(row.panel);
+			}
 		}
 
-		String tooltipText = username;
-		if (isFriend) tooltipText += " (friend)";
-		if (isIgnored) tooltipText += " (ignored)";
-		nameLabel.setToolTipText(tooltipText);
-		leftPanel.add(nameLabel, BorderLayout.NORTH);
+		// Refresh display attributes for all rows
+		for (NearbyPlayer p : current)
+		{
+			PlayerRow row = playerRows.get(p.getUsername());
+			if (row != null)
+			{
+				String username = p.getUsername();
+				boolean speaking = isPlayerSpeaking(username);
+				refreshDistanceLabel(row, p);
+				applyNameStyle(row, username, speaking);
+				applySpeakingStyle(row, username, speaking);
+			}
+		}
 
-		JLabel distanceLabel = new JLabel(getDistanceText(player));
-		distanceLabel.setForeground(isIgnored ? IGNORED_COLOR : new Color(180, 180, 180));
-		distanceLabel.setFont(distanceLabel.getFont().deriveFont(Font.PLAIN, 11f));
-		leftPanel.add(distanceLabel, BorderLayout.SOUTH);
-
-		panel.add(leftPanel, BorderLayout.WEST);
-
-		// Right side: Mute button and volume slider
-		JPanel rightPanel = new JPanel(new BorderLayout(5, 0));
-		rightPanel.setOpaque(false);
-		rightPanel.setPreferredSize(new Dimension(100, 60));
-
-		JButton muteButton = createMuteButton(username, muted);
-		rightPanel.add(muteButton, BorderLayout.NORTH);
-
-		JSlider volumeSlider = new JSlider(0, 200, (int) (volume * 100));
-		volumeSlider.setMajorTickSpacing(100);
-		volumeSlider.setMinorTickSpacing(50);
-		volumeSlider.setPaintTicks(true);
-		volumeSlider.setPreferredSize(new Dimension(80, 30));
-		volumeSlider.setToolTipText("Volume: " + (int) (volume * 100) + "%");
-		volumeSlider.addChangeListener(e -> {
-			float newVolume = volumeSlider.getValue() / 100.0f;
-			plugin.setPlayerVolume(username, newVolume);
-			volumeSlider.setToolTipText("Volume: " + volumeSlider.getValue() + "%");
-		});
-
-		JPanel sliderPanel = new JPanel(new BorderLayout());
-		sliderPanel.setOpaque(false);
-		JLabel volumeLabel = new JLabel("Vol");
-		volumeLabel.setForeground(new Color(150, 150, 150));
-		volumeLabel.setFont(volumeLabel.getFont().deriveFont(Font.PLAIN, 9f));
-		sliderPanel.add(volumeLabel, BorderLayout.NORTH);
-		sliderPanel.add(volumeSlider, BorderLayout.CENTER);
-
-		rightPanel.add(sliderPanel, BorderLayout.CENTER);
-
-		panel.add(rightPanel, BorderLayout.EAST);
-
-		return panel;
+		playersPanel.revalidate();
+		playersPanel.repaint();
 	}
 
-	private JButton createMuteButton(String username, boolean muted)
+	private void refreshDistanceLabels()
+	{
+		for (NearbyPlayer p : nearbyPlayers)
+		{
+			PlayerRow row = playerRows.get(p.getUsername());
+			if (row != null)
+			{
+				refreshDistanceLabel(row, p);
+			}
+		}
+	}
+
+	private void refreshDistanceLabel(PlayerRow row, NearbyPlayer player)
+	{
+		String dist = getDistanceText(player);
+		if (!dist.equals(row.distanceLabel.getText()))
+		{
+			row.distanceLabel.setText(dist);
+		}
+	}
+
+	private void refreshNameStyles()
+	{
+		for (NearbyPlayer p : nearbyPlayers)
+		{
+			PlayerRow row = playerRows.get(p.getUsername());
+			if (row != null)
+			{
+				applyNameStyle(row, p.getUsername(), isPlayerSpeaking(p.getUsername()));
+			}
+		}
+		playersPanel.repaint();
+	}
+
+	private void refreshSpeakingState()
+	{
+		for (NearbyPlayer p : nearbyPlayers)
+		{
+			String username = p.getUsername();
+			PlayerRow row = playerRows.get(username);
+			if (row != null)
+			{
+				boolean speaking = isPlayerSpeaking(username);
+				applySpeakingStyle(row, username, speaking);
+				applyNameStyle(row, username, speaking);
+			}
+		}
+		playersPanel.repaint();
+	}
+
+	// ── Row creation ─────────────────────────────────────────────────────────
+
+	private PlayerRow createPlayerRow(String username)
+	{
+		PlayerRow row = new PlayerRow();
+		boolean muted = plugin.isPlayerMuted(username);
+		float volume = plugin.getPlayerVolume(username);
+
+		row.panel = new JPanel(new BorderLayout(8, 0));
+		row.panel.setBackground(PLAYER_BG);
+		row.panel.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 8));
+		row.panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 64));
+
+		// ── Left: name + distance ───────────────────────────────────────────
+		JPanel leftPanel = new JPanel(new GridBagLayout());
+		leftPanel.setOpaque(false);
+
+		GridBagConstraints gbc = new GridBagConstraints();
+		gbc.gridx = 0;
+		gbc.gridy = 0;
+		gbc.anchor = GridBagConstraints.WEST;
+		gbc.fill = GridBagConstraints.HORIZONTAL;
+		gbc.weightx = 1.0;
+
+		row.nameLabel = new JLabel(username);
+		row.nameLabel.setFont(row.nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
+		row.nameLabel.setForeground(TEXT_COLOR);
+		leftPanel.add(row.nameLabel, gbc);
+
+		gbc.gridy = 1;
+		row.distanceLabel = new JLabel("? tiles");
+		row.distanceLabel.setFont(row.distanceLabel.getFont().deriveFont(Font.PLAIN, 10f));
+		row.distanceLabel.setForeground(new Color(160, 160, 160));
+		leftPanel.add(row.distanceLabel, gbc);
+
+		row.panel.add(leftPanel, BorderLayout.CENTER);
+
+		// ── Right: mute button + volume slider ──────────────────────────────
+		JPanel rightPanel = new JPanel(new GridBagLayout());
+		rightPanel.setOpaque(false);
+
+		GridBagConstraints rgbc = new GridBagConstraints();
+		rgbc.gridx = 0;
+		rgbc.gridy = 0;
+		rgbc.anchor = GridBagConstraints.CENTER;
+		rgbc.insets = new Insets(0, 0, 2, 0);
+
+		row.muteButton = createMuteButton(username, muted, row);
+		rightPanel.add(row.muteButton, rgbc);
+
+		rgbc.gridy = 1;
+		rgbc.fill = GridBagConstraints.HORIZONTAL;
+		rgbc.insets = new Insets(0, 0, 0, 0);
+
+		row.volumeSlider = new JSlider(0, 200, (int) (volume * 100));
+		row.volumeSlider.setPreferredSize(new Dimension(72, 20));
+		row.volumeSlider.setToolTipText("Volume: " + (int) (volume * 100) + "%");
+		row.volumeSlider.setFocusable(false);
+		row.volumeSlider.setOpaque(false);
+		row.volumeSlider.addMouseListener(new java.awt.event.MouseAdapter()
+		{
+			@Override
+			public void mousePressed(java.awt.event.MouseEvent e)
+			{
+				row.sliderDragging = true;
+			}
+
+			@Override
+			public void mouseReleased(java.awt.event.MouseEvent e)
+			{
+				row.sliderDragging = false;
+			}
+		});
+		row.volumeSlider.addChangeListener(e -> {
+			if (!row.volumeSlider.getValueIsAdjusting())
+			{
+				float newVolume = row.volumeSlider.getValue() / 100.0f;
+				plugin.setPlayerVolume(username, newVolume);
+			}
+			row.volumeSlider.setToolTipText("Volume: " + row.volumeSlider.getValue() + "%");
+		});
+		rightPanel.add(row.volumeSlider, rgbc);
+
+		row.panel.add(rightPanel, BorderLayout.EAST);
+
+		// Apply initial name styling
+		applyNameStyle(row, username, false);
+
+		return row;
+	}
+
+	private JButton createMuteButton(String username, boolean muted, PlayerRow row)
 	{
 		JButton button = new JButton(muted ? "\uD83D\uDD07" : "\uD83D\uDD0A");
-		button.setPreferredSize(new Dimension(50, 24));
+		button.setPreferredSize(new Dimension(44, 22));
 		button.setFocusPainted(false);
 		button.setContentAreaFilled(false);
 		button.setOpaque(true);
 		button.setBackground(BUTTON_BG);
 		button.setForeground(muted ? new Color(244, 67, 54) : TEXT_COLOR);
-		button.setBorder(BorderFactory.createEmptyBorder(2, 5, 2, 5));
+		button.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
 		button.setToolTipText(muted ? "Unmute player" : "Mute player");
 
 		button.addActionListener((ActionEvent e) -> {
@@ -353,17 +465,65 @@ public class TileWhisperPanel extends PluginPanel
 		return button;
 	}
 
+	// ── Styling helpers ──────────────────────────────────────────────────────
+
+	private void applyNameStyle(PlayerRow row, String username, boolean speaking)
+	{
+		boolean isFriend = friends.contains(username);
+		boolean isIgnored = ignored.contains(username);
+
+		String prefix = isFriend ? "\u2605 " : "";
+		String suffix = isIgnored ? " \u26D4" : "";
+		row.nameLabel.setText(prefix + username + suffix);
+
+		String tooltip = username;
+		if (isFriend) tooltip += " (friend)";
+		if (isIgnored) tooltip += " (ignored)";
+		row.nameLabel.setToolTipText(tooltip);
+		row.distanceLabel.setForeground(isIgnored ? IGNORED_COLOR : new Color(160, 160, 160));
+
+		if (speaking)
+		{
+			row.nameLabel.setForeground(SPEAKING_COLOR);
+			row.nameLabel.setFont(row.nameLabel.getFont().deriveFont(Font.BOLD, 12f));
+		}
+		else if (isIgnored)
+		{
+			row.nameLabel.setForeground(IGNORED_COLOR);
+			row.nameLabel.setFont(row.nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
+		}
+		else if (isFriend)
+		{
+			row.nameLabel.setForeground(FRIEND_COLOR);
+			row.nameLabel.setFont(row.nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
+		}
+		else
+		{
+			row.nameLabel.setForeground(TEXT_COLOR);
+			row.nameLabel.setFont(row.nameLabel.getFont().deriveFont(Font.PLAIN, 12f));
+		}
+	}
+
+	private void applySpeakingStyle(PlayerRow row, String username, boolean speaking)
+	{
+		Color bg = speaking ? PLAYER_BG_SPEAKING : PLAYER_BG;
+		if (!row.panel.getBackground().equals(bg))
+		{
+			row.panel.setBackground(bg);
+		}
+	}
+
+	// ── Utilities ────────────────────────────────────────────────────────────
+
 	private String getDistanceText(NearbyPlayer player)
 	{
 		if (localPosition == null)
 		{
 			return "? tiles";
 		}
-
 		int dx = Math.abs(player.getX() - localPosition.getX());
 		int dy = Math.abs(player.getY() - localPosition.getY());
 		int distance = Math.max(dx, dy);
-
 		return distance + " tile" + (distance == 1 ? "" : "s");
 	}
 
