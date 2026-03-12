@@ -11,7 +11,7 @@ public class OpusCodec
 	public static final int FRAME_SAMPLES = 320; // 20ms at 16kHz
 	public static final int FRAME_BYTES_PCM = FRAME_SAMPLES * 2;
 	public static final int MAX_PACKET_BYTES = 1276;
-	public static final int BITRATE = 32000; // 32 kbps
+	public static final int BITRATE = 64000; // 64 kbps - higher quality voice
 
 	// Concentus is pure Java — no native loading needed.
 	public static synchronized boolean loadLibrary()
