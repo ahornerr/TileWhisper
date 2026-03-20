@@ -209,6 +209,6 @@ public interface TileWhisperConfig extends Config
 	)
 	default String serverUrl()
 	{
-		return "wss://tilewhisper.horner.codes";
+		return "wss://relay.tilewhisper.com";
 	}
 }
