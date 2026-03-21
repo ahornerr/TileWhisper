@@ -39,9 +39,15 @@ Creates `build/libs/TileWhisper-1.0-SNAPSHOT-all.jar`.
 
 Bolt requires a wrapper script to inject the `-ea` flag needed by the dev launcher.
 
+**Linux/Unix:**
 ```bash
 cp java-wrapper.sh ~/.var/app/com.adamcake.Bolt/data/bolt-launcher/java-wrapper.sh
 chmod +x ~/.var/app/com.adamcake.Bolt/data/bolt-launcher/java-wrapper.sh
+```
+
+**Windows:**
+```cmd
+copy java-wrapper.bat %APPDATA%\Roaming\bolt-launcher\java-wrapper.bat
 ```
 
 ### 3. Configure Bolt
@@ -49,7 +55,9 @@ chmod +x ~/.var/app/com.adamcake.Bolt/data/bolt-launcher/java-wrapper.sh
 1. Open Bolt Launcher → RuneLite settings
 2. Enable **Use custom RuneLite JAR**
 3. Set JAR path to: `<repo>/build/libs/TileWhisper-1.0-SNAPSHOT-all.jar`
-4. Set launch command to: `<path-to>/java-wrapper.sh %command%`
+4. Set launch command to:
+   - **Linux/Unix:** `<path-to>/java-wrapper.sh %command%`
+   - **Windows:** `<path-to>\java-wrapper.bat %command%`
 5. Save and restart Bolt
 
 ## Distribution JAR (non-Bolt)
