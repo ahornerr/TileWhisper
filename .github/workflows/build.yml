@@ -9,24 +9,44 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           java-version: '21'
-          distribution: 'temurin'
+          distribution: temurin
 
-      - name: Build
-        run: ./gradlew shadowJar
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build JARs
+        run: ./gradlew shadowJar distJar
 
       - name: Test
         run: ./gradlew test
 
-      - name: Upload JAR
+      - name: Upload JARs
+        id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: TileWhisper
-          path: build/libs/TileWhisper-*-all.jar
+          name: TileWhisper-${{ github.sha }}
+          path: build/libs/TileWhisper-*.jar
+          retention-days: 90
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifactUrl = `https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `📦 **Build artifacts:** [Download JARs](${artifactUrl})`,
+            });
