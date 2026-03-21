@@ -126,11 +126,11 @@ public class VoicePacketTest
 	@Test
 	public void packetSize_correctForGivenInputs()
 	{
-		// Header is always 14 bytes + usernameLen + audioLen
+		// Header is always 14 bytes + usernameLen + 4 (timestamp) + audioLen
 		byte[] audio = new byte[50];
 		String username = "TestUser"; // 8 chars
 		VoicePacket packet = new VoicePacket(301, 3200, 3200, 0, username, audio);
-		assertEquals(14 + 8 + 50, packet.toBytes().length);
+		assertEquals(14 + 8 + 4 + 50, packet.toBytes().length);
 	}
 
 	@Test
