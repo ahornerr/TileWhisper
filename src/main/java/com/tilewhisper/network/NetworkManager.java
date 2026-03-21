@@ -22,6 +22,8 @@ public class NetworkManager
 {
 	private static final int MAX_RECONNECT_ATTEMPTS = 10;
 	private static final long[] RECONNECT_DELAYS_MS = {5000, 10000, 20000, 30000, 60000};
+	// If no message received for this long, assume the connection is dead and reconnect
+	private static final long HEARTBEAT_TIMEOUT_MS = 65_000; // server pings every 30s
 
 	private final Gson gson = new Gson();
 	private WebSocket webSocket;
@@ -32,6 +34,9 @@ public class NetworkManager
 		t.setDaemon(true);
 		return t;
 	});
+
+	// Tracks when the last message (any type) was received, for heartbeat detection
+	private volatile long lastMessageReceived = System.currentTimeMillis();
 
 	private final Consumer<List<NearbyPlayer>> onNearbyPlayers;
 	private final BiConsumer<VoicePacket, byte[]> onAudioReceived;
@@ -55,8 +60,19 @@ public class NetworkManager
 
 	public void connect(String url)
 	{
+		URI uri = URI.create(url);
+		String scheme = uri.getScheme();
+		if (!"wss".equals(scheme) && !"ws".equals(scheme))
+		{
+			throw new IllegalArgumentException("Server URL must use ws:// or wss:// scheme, got: " + scheme);
+		}
+		if ("ws".equals(scheme))
+		{
+			log.warn("TileWhisper: connecting to unencrypted relay (ws://) — voice, position, and username data are NOT encrypted in transit");
+		}
 		this.currentUrl = url;
 		reconnectAttempts.set(0);
+		lastMessageReceived = System.currentTimeMillis();
 		doConnect();
 	}
 
@@ -207,13 +223,29 @@ public class NetworkManager
 			log.info("WebSocket connection opened");
 			connected.set(true);
 			reconnectAttempts.set(0);
+			lastMessageReceived = System.currentTimeMillis();
 			onConnectionChanged.accept(true);
+			// Schedule heartbeat check every 35s. Server pings every 30s, so if we
+			// see nothing for 65s the connection is almost certainly dead.
+			scheduler.scheduleAtFixedRate(() -> {
+				if (connected.get() && System.currentTimeMillis() - lastMessageReceived > HEARTBEAT_TIMEOUT_MS)
+				{
+					log.warn("TileWhisper: no message received for {}ms — reconnecting", HEARTBEAT_TIMEOUT_MS);
+					connected.set(false);
+					if (webSocket != null)
+					{
+						webSocket.abort();
+					}
+					scheduleReconnect();
+				}
+			}, 35, 35, TimeUnit.SECONDS);
 			webSocket.request(1);
 		}
 
 		@Override
 		public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last)
 		{
+			lastMessageReceived = System.currentTimeMillis();
 			textAccumulator.append(data);
 
 			if (last)
@@ -252,6 +284,7 @@ public class NetworkManager
 		@Override
 		public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last)
 		{
+			lastMessageReceived = System.currentTimeMillis();
 			byte[] bytes = new byte[data.remaining()];
 			data.get(bytes);
 			binaryAccumulator.write(bytes, 0, bytes.length);

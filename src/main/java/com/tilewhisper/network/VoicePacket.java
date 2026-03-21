@@ -10,6 +10,10 @@ import java.nio.ByteOrder;
 @AllArgsConstructor
 public class VoicePacket
 {
+	// Maximum audio payload: ~4000 bytes is well above a single 20ms Opus frame at 32kbps.
+	// Prevents memory exhaustion from maliciously oversized audio payloads.
+	private static final int MAX_AUDIO_BYTES = 4000;
+
 	private int world;
 	private int x;
 	private int y;
@@ -22,7 +26,8 @@ public class VoicePacket
 		byte[] usernameBytes = username.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 		int usernameLen = Math.min(usernameBytes.length, 12); // OSRS username max 12 chars
 
-		ByteBuffer buffer = ByteBuffer.allocate(14 + usernameLen + audioData.length);
+		// Layout: [world:4][x:4][y:4][plane:1][usernameLen:1][username:N][timestampSec:4][audio:M]
+		ByteBuffer buffer = ByteBuffer.allocate(14 + usernameLen + 4 + audioData.length);
 		buffer.order(ByteOrder.LITTLE_ENDIAN);
 
 		buffer.putInt(world);
@@ -31,6 +36,7 @@ public class VoicePacket
 		buffer.put((byte) plane);
 		buffer.put((byte) usernameLen);
 		buffer.put(usernameBytes, 0, usernameLen);
+		buffer.putInt((int) (System.currentTimeMillis() / 1000)); // seconds since epoch
 		buffer.put(audioData);
 
 		return buffer.array();
@@ -52,6 +58,8 @@ public class VoicePacket
 		int plane = buffer.get() & 0xFF;
 		int usernameLen = buffer.get() & 0xFF;
 
+		// Header with timestamp: 14 base + usernameLen + 4 timestamp bytes
+		int audioStart = 14 + usernameLen + 4;
 		if (data.length < 14 + usernameLen)
 		{
 			throw new IllegalArgumentException("Packet too short for username: " + data.length);
@@ -61,7 +69,25 @@ public class VoicePacket
 		buffer.get(usernameBytes);
 		String username = new String(usernameBytes, java.nio.charset.StandardCharsets.UTF_8);
 
-		byte[] audioData = new byte[data.length - 14 - usernameLen];
+		// Skip optional 4-byte timestamp field if present (server validates it)
+		int audioDataLen;
+		if (data.length >= audioStart)
+		{
+			buffer.getInt(); // consume timestampSec
+			audioDataLen = data.length - audioStart;
+		}
+		else
+		{
+			// Legacy packet without timestamp — audio starts immediately after username
+			audioDataLen = data.length - 14 - usernameLen;
+		}
+
+		if (audioDataLen > MAX_AUDIO_BYTES)
+		{
+			throw new IllegalArgumentException("Audio payload too large: " + audioDataLen + " bytes");
+		}
+
+		byte[] audioData = new byte[audioDataLen];
 		buffer.get(audioData);
 
 		return new VoicePacket(world, x, y, plane, username, audioData);

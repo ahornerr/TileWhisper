@@ -203,7 +203,7 @@ public interface TileWhisperConfig extends Config
 	@ConfigItem(
 		keyName = "serverUrl",
 		name = "Server URL",
-		description = "WebSocket relay server URL",
+		description = "WebSocket relay server URL. Must use wss:// (encrypted) or ws:// (unencrypted). Custom servers are unverified — only change this if you trust the server operator.",
 		section = advancedSection,
 		position = 0
 	)
