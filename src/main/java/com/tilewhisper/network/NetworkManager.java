@@ -29,6 +29,7 @@ public class NetworkManager
 	private WebSocket webSocket;
 	private final AtomicBoolean connected = new AtomicBoolean(false);
 	private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
+	private final AtomicBoolean reconnectScheduled = new AtomicBoolean(false);
 	private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
 		Thread t = new Thread(r, "TileWhisper-Scheduler");
 		t.setDaemon(true);
@@ -198,10 +199,16 @@ public class NetworkManager
 
 	private void scheduleReconnect()
 	{
+		if (!reconnectScheduled.compareAndSet(false, true))
+		{
+			return;
+		}
+
 		int attempt = reconnectAttempts.incrementAndGet();
 		if (attempt > MAX_RECONNECT_ATTEMPTS)
 		{
 			log.warn("Max reconnect attempts reached, giving up");
+			reconnectScheduled.set(false);
 			return;
 		}
 
@@ -209,7 +216,10 @@ public class NetworkManager
 		long delayMs = RECONNECT_DELAYS_MS[delayIndex];
 
 		log.info("Reconnecting in {}ms (attempt {}/{})", delayMs, attempt, MAX_RECONNECT_ATTEMPTS);
-		scheduler.schedule(this::doConnect, delayMs, TimeUnit.MILLISECONDS);
+		scheduler.schedule(() -> {
+			reconnectScheduled.set(false);
+			doConnect();
+		}, delayMs, TimeUnit.MILLISECONDS);
 	}
 
 	private class WebSocketListener implements WebSocket.Listener
@@ -222,7 +232,6 @@ public class NetworkManager
 		{
 			log.info("WebSocket connection opened");
 			connected.set(true);
-			reconnectAttempts.set(0);
 			lastMessageReceived = System.currentTimeMillis();
 			onConnectionChanged.accept(true);
 			// Schedule heartbeat check every 35s. Server pings every 30s, so if we
