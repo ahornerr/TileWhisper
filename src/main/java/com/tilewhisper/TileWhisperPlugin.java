@@ -91,8 +91,10 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 	private volatile java.util.Set<String> cachedFriends = java.util.Collections.emptySet();
 	private volatile java.util.Set<String> cachedIgnored = java.util.Collections.emptySet();
 
-	// Track nearby players to detect departures for cleanup (WS callback thread only)
-	private final java.util.Set<String> nearbyUsernames = new java.util.HashSet<>();
+	// Track nearby players to detect departures and validate incoming audio senders.
+	// Updated atomically (volatile reference to an immutable set) so onAudioReceived
+	// can safely read it from the WebSocket callback thread without locking.
+	private volatile java.util.Set<String> nearbyUsernames = java.util.Collections.emptySet();
 
 	@Override
 	protected void startUp()
@@ -249,7 +251,7 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		}
 
 		cachedUsername = null;
-		nearbyUsernames.clear();
+		nearbyUsernames = java.util.Collections.emptySet();
 
 		log.info("TileWhisper plugin stopped");
 	}
@@ -437,6 +439,15 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 		java.util.Set<String> friends = cachedFriends;
 		java.util.Set<String> ignored = cachedIgnored;
 
+		// Cross-validate sender against the server-provided nearby list. Only enforce
+		// once we've received at least one nearby update (non-empty set). This prevents
+		// audio injection from senders that the game client has not confirmed as nearby.
+		java.util.Set<String> nearby = nearbyUsernames;
+		if (!nearby.isEmpty() && !nearby.contains(senderName))
+		{
+			return;
+		}
+
 		if (!shouldReceiveAudio(senderName, friends, config.friendsOnly(), config.voiceRangeMode(), ignored))
 		{
 			return;
@@ -538,15 +549,16 @@ public class TileWhisperPlugin extends Plugin implements KeyListener
 				newUsernames.add(p.getUsername());
 			}
 		}
-		for (String username : nearbyUsernames)
+		java.util.Set<String> oldUsernames = nearbyUsernames;
+		for (String username : oldUsernames)
 		{
 			if (!newUsernames.contains(username) && audioPlayback != null)
 			{
 				audioPlayback.cleanupPlayer(username);
 			}
 		}
-		nearbyUsernames.clear();
-		nearbyUsernames.addAll(newUsernames);
+		// Atomic update — onAudioReceived reads this reference without locking
+		nearbyUsernames = java.util.Collections.unmodifiableSet(newUsernames);
 
 		clientThread.invokeLater(() -> {
 			if (panel != null)

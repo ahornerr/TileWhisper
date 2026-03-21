@@ -29,10 +29,14 @@ public class AudioPlayback
 	private SourceDataLine sourceDataLine;
 	private volatile float outputVolumeScale;
 
+	// After this many consecutive decode errors from one player, auto-mute them.
+	private static final int DECODE_ERROR_THRESHOLD = 10;
+
 	// Per-player state
 	private final Map<String, OpusDecoder> decoders = new ConcurrentHashMap<>();
 	private final Map<String, Float> playerVolumes = new ConcurrentHashMap<>();
 	private final Map<String, Boolean> playerMuted = new ConcurrentHashMap<>();
+	private final Map<String, Integer> decodeErrors = new ConcurrentHashMap<>();
 	// Per-player pending frame queues (bounded to prevent memory pressure from bursts)
 	private final Map<String, ConcurrentLinkedQueue<PendingFrame>> pendingFrames = new ConcurrentHashMap<>();
 	private static final int MAX_PENDING_FRAMES_PER_PLAYER = 10; // 200ms of audio
@@ -160,17 +164,33 @@ public class AudioPlayback
 						mixBuffer[i] += (int) (decodeBuffer[i] * perPlayerScale);
 					}
 					hasAudio = true;
+					// Reset error count on successful decode
+					decodeErrors.remove(username);
 				}
 				else
 				{
 					log.warn("Opus decode error {} for {}", decodedSamples, username);
 					decoders.remove(username); // Force decoder recreation next time
+					int errors = decodeErrors.merge(username, 1, Integer::sum);
+					if (errors >= DECODE_ERROR_THRESHOLD)
+					{
+						log.warn("Auto-muting {} after {} consecutive decode errors", username, errors);
+						playerMuted.put(username, true);
+						decodeErrors.remove(username);
+					}
 				}
 			}
 			catch (Exception e)
 			{
 				log.error("Error decoding audio frame from {}", username, e);
 				decoders.remove(username); // Force decoder recreation next time
+				int errors = decodeErrors.merge(username, 1, Integer::sum);
+				if (errors >= DECODE_ERROR_THRESHOLD)
+				{
+					log.warn("Auto-muting {} after {} consecutive decode errors", username, errors);
+					playerMuted.put(username, true);
+					decodeErrors.remove(username);
+				}
 			}
 		}
 
@@ -242,6 +262,7 @@ public class AudioPlayback
 		playerVolumes.remove(username);
 		playerMuted.remove(username);
 		pendingFrames.remove(username);
+		decodeErrors.remove(username);
 	}
 
 	public void close()
