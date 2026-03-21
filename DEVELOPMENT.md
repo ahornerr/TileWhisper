@@ -47,7 +47,7 @@ chmod +x ~/.var/app/com.adamcake.Bolt/data/bolt-launcher/java-wrapper.sh
 
 **Windows:**
 ```cmd
-copy java-wrapper.bat %APPDATA%\com.adamcake.Bolt\data\bolt-launcher\java-wrapper.bat
+copy java-wrapper.bat %APPDATA%\Roaming\bolt-launcher\java-wrapper.bat
 ```
 
 ### 3. Configure Bolt
